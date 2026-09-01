@@ -1,7 +1,7 @@
 import json
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -162,17 +162,61 @@ class AniCompanionTests(unittest.TestCase):
         self.assertIn('noiseSuppression:true', script)
         self.assertIn('stopMicrophoneMode', script)
 
+    def test_false_pause_is_merged_before_voice_message_submission(self):
+        script = (ROOT / 'static' / 'app.js').read_text()
+        self.assertIn('END_OF_SPEECH_SILENCE_MS=1300', script)
+        self.assertIn('TRANSCRIPT_COMMIT_GRACE_MS=500', script)
+        self.assertIn('pendingTranscript', script)
+        self.assertIn('transcriptionQueue', script)
+        self.assertIn('scheduleTranscriptCommit', script)
+        self.assertIn('appendTranscript', script)
+        self.assertNotIn('microphoneMode||transcribing||utteranceRecorder', script)
+        self.assertNotIn('!utteranceRecorder&&!transcribing', script)
+
+    def test_resumed_speech_cancels_obsolete_ani_chat_tts_and_audio(self):
+        script = (ROOT / 'static' / 'app.js').read_text()
+        self.assertIn('new AbortController()', script)
+        self.assertIn('cancelActiveAniTurn', script)
+        self.assertIn("signal:chatController.signal", script)
+        self.assertIn("signal:ttsController.signal", script)
+        self.assertIn('if(turnId!==activeTurnId)return', script)
+        self.assertIn('player.pause()', script)
+        self.assertIn('cancelActiveAniTurn({removeBubble:true})', script)
+        self.assertIn("fetch('/api/cancel'", script)
+        self.assertIn('turn_id:turnId', script)
+
+    def test_cancel_endpoint_stops_active_hermes_process(self):
+        process = MagicMock()
+        process.returncode = None
+        process.wait = AsyncMock(return_value=0)
+        app_module.ACTIVE_CHAT_PROCESSES[42] = process
+        response = TestClient(app).post('/api/cancel', json={'turn_id': 42})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {'cancelled': True})
+        process.terminate.assert_called_once_with()
+        process.wait.assert_awaited_once_with()
+        self.assertNotIn(42, app_module.ACTIVE_CHAT_PROCESSES)
+
+    def test_tts_request_is_registered_for_turn_cancellation(self):
+        source = (ROOT / 'app.py').read_text()
+        self.assertIn('ACTIVE_TTS_TASKS', source)
+        self.assertIn('turn_id: int', source)
+        self.assertIn('audio_task.cancel()', source)
+        self.assertIn('_fetch_qwen_audio_async', source)
+
     def test_iphone_restores_preferred_microphone_on_first_page_gesture(self):
         script = (ROOT / 'static' / 'app.js').read_text()
         self.assertIn("localStorage.getItem('ani.microphone')==='on'", script)
         self.assertIn('armPreferredMicrophone', script)
         self.assertIn("document.addEventListener('pointerdown',resumePreferredMicrophone", script)
 
-    def test_avatar_uses_dark_lighting_and_emerald_irises(self):
+    def test_avatar_uses_dark_lighting_and_lighter_emerald_irises(self):
         source = (ROOT / 'src' / 'avatar-3d.js').read_text()
         self.assertIn('renderer.toneMappingExposure = 0.82', source)
         self.assertIn("material.name.includes('EyeIris')", source)
-        self.assertIn('0x10b981', source)
+        self.assertIn('0x6ee7b7', source)
+        self.assertIn('material.emissive.setHex(0x34d399)', source)
+        self.assertIn('material.emissiveIntensity = 0.16', source)
         self.assertIn('material.emissive.multiplyScalar(0.18)', source)
         self.assertIn('material.color.multiplyScalar(0.72)', source)
 
@@ -193,7 +237,8 @@ class AniCompanionTests(unittest.TestCase):
         self.assertIn('ticker.scrollWidth<=speech.clientWidth', script)
         self.assertIn("fill:'forwards'", script)
         self.assertIn('white-space:nowrap', css)
-        self.assertIn('-webkit-line-clamp:3', css)
+        self.assertIn('-webkit-line-clamp:2', css)
+        self.assertIn('min-height:54px', css)
         self.assertIn('.bubble.ani.collapsible.expanded', css)
         self.assertIn('background:#0a84ff', css)
         self.assertIn('.history:not(:empty){height:18vh}', css)
@@ -201,7 +246,8 @@ class AniCompanionTests(unittest.TestCase):
     def test_ticker_starts_with_audio_playback_and_uses_wav_duration(self):
         script = (ROOT / 'static' / 'app.js').read_text()
         self.assertNotIn('setEmotion(data.emotion);showSpeech(data.reply)', script)
-        self.assertIn('await player.play();\n  showSpeech(text,player.duration);', script)
+        self.assertIn('await player.play();', script)
+        self.assertIn('if(turnId!==activeTurnId){player.pause();return}\n  showSpeech(text,player.duration);', script)
         self.assertIn('durationSeconds*1000', script)
 
     def test_local_stt_endpoint_returns_whisper_transcript(self):
@@ -218,7 +264,7 @@ class AniCompanionTests(unittest.TestCase):
 
     def test_service_worker_precaches_avatar_runtime(self):
         worker = (ROOT / 'static' / 'sw.js').read_text()
-        self.assertIn("const CACHE='ani-companion-v9'", worker)
+        self.assertIn("const CACHE='ani-companion-v10'", worker)
         self.assertIn("'/avatar-3d.bundle.js'", worker)
 
     def test_manifest_is_installable_pwa(self):

@@ -67,7 +67,18 @@ await page.screenshot({ path: 'test-artifacts/avatar-3d-idle.png', fullPage: tru
 await page.evaluate(() => { window.aniAvatar.setEmotion('happy'); window.aniAvatar.setMouthOpen(1.1); });
 await page.waitForTimeout(250);
 await page.screenshot({ path: 'test-artifacts/avatar-3d-speaking.png', fullPage: true });
-await page.route('**/api/chat', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ reply: 'Voici une réponse volontairement longue qui doit apparaître dans une bulle de conversation. Elle contient assez de texte pour occuper plus de trois lignes sur un écran mobile, être tronquée proprement, puis se déplier entièrement lorsque François la touche.', emotion: 'happy', session_id: 'browser-test' }) }));
+let cancelledTurns = 0;
+await page.route('**/api/cancel', route => { cancelledTurns++; return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ cancelled: true }) }); });
+await page.route('**/api/chat', async route => {
+  const message = route.request().postDataJSON()?.message || '';
+  if (message === 'Tour interrompu') await new Promise(resolve => setTimeout(resolve, 900));
+  const reply = message === 'Tour interrompu'
+    ? 'Cette réponse obsolète ne doit jamais apparaître.'
+    : message === 'Tour actuel'
+      ? 'La réponse actuelle remplace correctement la précédente.'
+      : 'Voici une réponse volontairement longue qui doit apparaître dans une bulle de conversation. Elle contient assez de texte pour occuper plus de deux lignes sur un écran mobile, être tronquée proprement, puis se déplier entièrement lorsque François la touche.';
+  await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ reply, emotion: 'happy', session_id: 'browser-test' }) });
+});
 let resolveTtsRequested;
 const ttsRequested = new Promise(resolve => { resolveTtsRequested = resolve; });
 await page.route('**/api/tts', async route => {
@@ -103,11 +114,25 @@ const expandedBubble = await page.evaluate(() => ({
   height: document.querySelector('.bubble.ani.collapsible').clientHeight,
 }));
 expandedBubble.renderedPngBytes=(await page.locator('#avatar-canvas').screenshot()).length;
+await page.locator('#message-input').fill('Tour interrompu');
+await page.locator('button.send').click();
+await page.waitForTimeout(100);
+await page.locator('#message-input').fill('Tour actuel');
+await page.locator('button.send').click();
+await page.waitForFunction(() => document.getElementById('history').innerText.includes('La réponse actuelle'));
+await page.waitForTimeout(1000);
+const interruption = await page.evaluate(() => ({
+  obsoleteVisible: document.getElementById('history').innerText.includes('réponse obsolète'),
+  currentVisible: document.getElementById('history').innerText.includes('La réponse actuelle'),
+  assistantBubbles: document.querySelectorAll('.bubble.ani').length,
+}));
+interruption.cancelledTurns = cancelledTurns;
 await page.screenshot({ path: 'test-artifacts/avatar-3d-ticker.png', fullPage: true });
-console.log(JSON.stringify({ mobileProfile, state, orbit, mobileInputAudio, expandedBubble, resources, errors }, null, 2));
+console.log(JSON.stringify({ mobileProfile, state, orbit, mobileInputAudio, expandedBubble, interruption, resources, errors }, null, 2));
 if (!state.ready || !state.loadingHidden || state.renderedPngBytes < 10000) process.exitCode = 2;
 if (orbit.moved < 0.01 || orbit.returned > 0.02) process.exitCode = 6;
-if (!mobileInputAudio.keyboardDismissed || !mobileInputAudio.audioPlaying || mobileInputAudio.audioTime <= 0.05 || !mobileInputAudio.microphoneContinuous || mobileInputAudio.assistantHistoryBubbles !== 1 || mobileInputAudio.tickerWhiteSpace !== 'nowrap' || mobileInputAudio.tickerHeight > 31 || !mobileInputAudio.tickerHiddenBeforeAudio || Math.abs(mobileInputAudio.tickerDuration - 1000) > 100 || !mobileInputAudio.assistantCollapsed || mobileInputAudio.assistantLineClamp !== '3' || !mobileInputAudio.assistantClipped || !expandedBubble.expanded || expandedBubble.height <= mobileInputAudio.assistantCollapsedHeight || expandedBubble.renderedPngBytes < 10000) process.exitCode = 5;
+if (!mobileInputAudio.keyboardDismissed || !mobileInputAudio.audioPlaying || mobileInputAudio.audioTime <= 0.05 || !mobileInputAudio.microphoneContinuous || mobileInputAudio.assistantHistoryBubbles !== 1 || mobileInputAudio.tickerWhiteSpace !== 'nowrap' || mobileInputAudio.tickerHeight > 31 || !mobileInputAudio.tickerHiddenBeforeAudio || Math.abs(mobileInputAudio.tickerDuration - 1000) > 100 || !mobileInputAudio.assistantCollapsed || mobileInputAudio.assistantLineClamp !== '2' || mobileInputAudio.assistantCollapsedHeight < 54 || !mobileInputAudio.assistantClipped || !expandedBubble.expanded || expandedBubble.height <= mobileInputAudio.assistantCollapsedHeight || expandedBubble.renderedPngBytes < 10000) process.exitCode = 5;
+if (interruption.obsoleteVisible || !interruption.currentVisible || interruption.cancelledTurns < 1) process.exitCode = 7;
 if (resources.some((resource) => resource.status !== 200) || resources.length < 2) process.exitCode = 3;
 if (errors.length) process.exitCode = 4;
 await page.locator('#mic-button').click();

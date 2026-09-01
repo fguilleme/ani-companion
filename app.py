@@ -24,6 +24,8 @@ WHISPER_ASR_URL = os.getenv('ANI_WHISPER_ASR_URL', 'http://127.0.0.1:9002/asr')
 ANSI_RE = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]')
 SESSION_RE = re.compile(r'^[A-Za-z0-9_.:-]{1,160}$')
 RUN_SEMAPHORE = asyncio.Semaphore(2)
+ACTIVE_CHAT_PROCESSES: dict[int, asyncio.subprocess.Process] = {}
+ACTIVE_TTS_TASKS: dict[int, asyncio.Task] = {}
 
 app = FastAPI(title='Ani Companion', docs_url=None, redoc_url=None)
 
@@ -31,11 +33,17 @@ app = FastAPI(title='Ani Companion', docs_url=None, redoc_url=None)
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=12000)
     session_id: str | None = Field(default=None, max_length=160)
+    turn_id: int = Field(default=0, ge=0)
+
+
+class CancelRequest(BaseModel):
+    turn_id: int = Field(ge=0)
 
 
 class TTSRequest(BaseModel):
     text: str = Field(min_length=1, max_length=5000)
     emotion: str = Field(default='neutral', max_length=24)
+    turn_id: int = Field(default=0, ge=0)
 
 
 @app.middleware('http')
@@ -130,12 +138,21 @@ async def chat(payload: ChatRequest):
             stderr=asyncio.subprocess.PIPE,
             env={**os.environ, 'HERMES_HOME': '/home/francois/.hermes/profiles/ani'},
         )
+        ACTIVE_CHAT_PROCESSES[payload.turn_id] = process
         try:
             stdout, stderr = await asyncio.wait_for(process.communicate(message.encode('utf-8')), timeout=150)
         except asyncio.TimeoutError:
             process.kill()
             await process.wait()
             raise HTTPException(status_code=504, detail='Ani met trop longtemps à répondre.')
+        except asyncio.CancelledError:
+            if process.returncode is None:
+                process.terminate()
+                await process.wait()
+            raise
+        finally:
+            if ACTIVE_CHAT_PROCESSES.get(payload.turn_id) is process:
+                ACTIVE_CHAT_PROCESSES.pop(payload.turn_id, None)
 
     if process.returncode != 0:
         error = stderr.decode('utf-8', errors='replace').strip()
@@ -144,6 +161,23 @@ async def chat(payload: ChatRequest):
     if not reply:
         raise HTTPException(status_code=502, detail="Ani n'a produit aucune réponse.")
     return {'reply': reply, 'session_id': session_id or payload.session_id, 'emotion': classify_emotion(reply)}
+
+
+@app.post('/api/cancel')
+async def cancel(payload: CancelRequest):
+    process = ACTIVE_CHAT_PROCESSES.pop(payload.turn_id, None)
+    audio_task = ACTIVE_TTS_TASKS.pop(payload.turn_id, None)
+    if audio_task and not audio_task.done():
+        audio_task.cancel()
+        await asyncio.gather(audio_task, return_exceptions=True)
+    if process and process.returncode is None:
+        process.terminate()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=2)
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+    return {'cancelled': process is not None or audio_task is not None}
 
 
 def _delete_file(path: str):
@@ -180,6 +214,18 @@ def _fetch_qwen_audio(text: str, instructions: str = '') -> bytes:
     if not audio:
         raise RuntimeError('Qwen TTS returned empty audio')
     return audio
+
+
+async def _fetch_qwen_audio_async(text: str, instructions: str = '') -> bytes:
+    request = build_qwen_tts_request(text, instructions)
+    assert isinstance(request.data, bytes)
+    content = request.data
+    async with httpx.AsyncClient(timeout=180) as client:
+        response = await client.post(QWEN_TTS_URL, content=content, headers={'Content-Type': 'application/json'})
+        response.raise_for_status()
+    if not response.content:
+        raise RuntimeError('Qwen TTS returned empty audio')
+    return response.content
 
 
 def prepare_spoken_text(text: str) -> str:
@@ -236,12 +282,20 @@ async def tts(payload: TTSRequest, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=422, detail='Aucun texte à prononcer.')
     fd, path = tempfile.mkstemp(prefix='ani-', suffix='.wav')
     os.close(fd)
+    audio_task = asyncio.create_task(_fetch_qwen_audio_async(spoken, instructions))
+    ACTIVE_TTS_TASKS[payload.turn_id] = audio_task
     try:
-        audio = await asyncio.to_thread(_fetch_qwen_audio, spoken, instructions)
+        audio = await audio_task
         Path(path).write_bytes(audio)
+    except asyncio.CancelledError:
+        _delete_file(path)
+        raise
     except Exception as exc:
         _delete_file(path)
         raise HTTPException(status_code=502, detail='La voix est momentanément indisponible.') from exc
+    finally:
+        if ACTIVE_TTS_TASKS.get(payload.turn_id) is audio_task:
+            ACTIVE_TTS_TASKS.pop(payload.turn_id, None)
     background_tasks.add_task(_delete_file, path)
     return FileResponse(path, media_type='audio/wav', filename='ani.wav')
 

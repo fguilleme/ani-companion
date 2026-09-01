@@ -80,7 +80,13 @@ function tuneMaterials(model) {
     for (const material of materials) {
       if (!material || visited.has(material)) continue;
       visited.add(material);
-      if (material.name.includes('EyeIris')) material.color?.setHex(0x10b981);
+      if (material.name.includes('EyeIris')) {
+        material.color?.setHex(0x6ee7b7);
+        if (material.emissive) {
+          material.emissive.setHex(0x34d399);
+          material.emissiveIntensity = 0.16;
+        }
+      }
       if (material.name.includes('HAIR') && material.emissive) {
         material.color.multiplyScalar(0.72);
         material.emissive.multiplyScalar(0.18);

@@ -48,6 +48,12 @@ const SILENT_WAV='data:audio/wav;base64,UklGRkQDAABXQVZFZm10IBAAAAABAAEAQB8AAIA+
 let audioEnvelope=[];
 let mouthFrame=null;
 let audioUnlocked=false;
+let activeTurnId=0;
+let aniTurnActive=false;
+let chatController=null;
+let ttsController=null;
+let activeAssistantBubble=null;
+let activeAudioUrl=null;
 
 function unlockAudio(){
   if(!voiceEnabled||audioUnlocked)return;
@@ -104,33 +110,64 @@ function startLipSync(envelope){
   animate();
 }
 
-async function speak(text,emotion){
+function cancelActiveAniTurn({removeBubble=false}={}){
+  const turnId=activeTurnId;
+  if(aniTurnActive)fetch('/api/cancel',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({turn_id:turnId}),keepalive:true}).catch(()=>{});
+  activeTurnId++;
+  chatController?.abort();chatController=null;
+  ttsController?.abort();ttsController=null;
+  player.pause();
+  if(activeAudioUrl){URL.revokeObjectURL(activeAudioUrl);activeAudioUrl=null}
+  player.removeAttribute('src');player.load();
+  hideSpeech();stopLipSync();thinking.hidden=true;setEmotion('neutral');
+  if(removeBubble&&aniTurnActive&&activeAssistantBubble?.isConnected)activeAssistantBubble.remove();
+  activeAssistantBubble=null;aniTurnActive=false;
+}
+
+async function speak(text,emotion,turnId){
   if(!voiceEnabled)return;
-  const response=await fetch('/api/tts',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text,emotion})});
+  ttsController=new AbortController();
+  const response=await fetch('/api/tts',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text,emotion,turn_id:turnId}),signal:ttsController.signal});
+  if(turnId!==activeTurnId)return;
   if(!response.ok)throw new Error('Voix indisponible');
   const blob=await response.blob();
-  if(player.src)URL.revokeObjectURL(player.src);
-  player.src=URL.createObjectURL(blob);
+  if(turnId!==activeTurnId)return;
+  if(activeAudioUrl)URL.revokeObjectURL(activeAudioUrl);
+  activeAudioUrl=URL.createObjectURL(blob);player.src=activeAudioUrl;player.dataset.turnId=String(turnId);
   const envelopePromise=buildAudioEnvelope(blob);
   avatar.classList.add('speaking');
   await player.play();
+  if(turnId!==activeTurnId){player.pause();return}
   showSpeech(text,player.duration);
-  startLipSync(await envelopePromise);
+  const envelope=await envelopePromise;
+  if(turnId!==activeTurnId)return;
+  startLipSync(envelope);
 }
-player.addEventListener('ended',()=>{stopLipSync();hideSpeech()});
+player.addEventListener('ended',()=>{
+  stopLipSync();hideSpeech();
+  if(Number(player.dataset.turnId)===activeTurnId){aniTurnActive=false;activeAssistantBubble=null}
+});
 player.addEventListener('pause',stopLipSync);
 
 form.addEventListener('submit',async event=>{
   event.preventDefault();const message=input.value.trim();if(!message)return;
+  cancelActiveAniTurn();const turnId=activeTurnId;aniTurnActive=true;
+  chatController=new AbortController();
   input.blur();unlockAudio();input.value='';bubble(message,'user');thinking.hidden=false;setEmotion('curious');
   try{
-    const response=await fetch('/api/chat',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message,session_id:localStorage.getItem('ani.session')})});
+    const response=await fetch('/api/chat',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message,session_id:localStorage.getItem('ani.session'),turn_id:turnId}),signal:chatController.signal});
+    if(turnId!==activeTurnId)return;
     const data=await response.json();if(!response.ok)throw new Error(data.detail||'Ani ne répond pas');
+    if(turnId!==activeTurnId)return;
     if(data.session_id)localStorage.setItem('ani.session',data.session_id);
     thinking.hidden=true;setEmotion(data.emotion);
-    bubble(data.reply,'ani',{collapsible:true});
-    if(voiceEnabled)await speak(data.reply,data.emotion);else showSpeech(data.reply);
-  }catch(error){thinking.hidden=true;setEmotion('sad');bubble(error.message,'ani')}
+    activeAssistantBubble=bubble(data.reply,'ani',{collapsible:true});
+    if(voiceEnabled)await speak(data.reply,data.emotion,turnId);
+    else{showSpeech(data.reply);aniTurnActive=false;activeAssistantBubble=null}
+  }catch(error){
+    if(error.name==='AbortError'||turnId!==activeTurnId)return;
+    thinking.hidden=true;aniTurnActive=false;activeAssistantBubble=null;setEmotion('sad');bubble(error.message,'ani');
+  }
 });
 voiceToggle.addEventListener('click',()=>{voiceEnabled=!voiceEnabled;localStorage.setItem('ani.voice',voiceEnabled?'on':'off');voiceToggle.classList.toggle('active',voiceEnabled);voiceToggle.setAttribute('aria-pressed',String(voiceEnabled));if(!voiceEnabled)player.pause()});
 
@@ -156,6 +193,12 @@ let speechStarted=0;
 let silenceStarted=0;
 let transcribing=false;
 let discardRecording=false;
+const END_OF_SPEECH_SILENCE_MS=1300;
+const TRANSCRIPT_COMMIT_GRACE_MS=500;
+let pendingTranscript='';
+let transcriptCommitTimer=null;
+let queuedTranscriptions=0;
+let transcriptionQueue=Promise.resolve();
 
 function recorderMimeType(){
   for(const type of ['audio/mp4','audio/webm;codecs=opus','audio/webm','audio/ogg;codecs=opus']){
@@ -164,19 +207,45 @@ function recorderMimeType(){
   return '';
 }
 
+function scheduleTranscriptCommit(){
+  clearTimeout(transcriptCommitTimer);transcriptCommitTimer=null;
+  if(utteranceRecorder||queuedTranscriptions)return;
+  transcriptCommitTimer=setTimeout(()=>{
+    transcriptCommitTimer=null;
+    if(utteranceRecorder||queuedTranscriptions)return;
+    const message=pendingTranscript.trim();pendingTranscript='';
+    if(message){input.value=message;form.requestSubmit()}
+  },TRANSCRIPT_COMMIT_GRACE_MS);
+}
+
+function appendTranscript(text){
+  const fragment=text?.trim();if(!fragment)return;
+  pendingTranscript=[pendingTranscript,fragment].filter(Boolean).join(' ').replace(/\s+/g,' ').trim();
+}
+
 async function transcribeUtterance(blob){
-  transcribing=true;micButton.classList.add('transcribing');
-  try{
-    const response=await fetch('/api/stt',{method:'POST',headers:{'content-type':blob.type||'application/octet-stream'},body:blob});
-    const data=await response.json();
-    if(!response.ok){if(response.status!==422)throw new Error(data.detail||'Transcription indisponible');return}
-    if(data.text?.trim()){input.value=data.text.trim();form.requestSubmit()}
-  }catch(error){bubble(microphoneErrorMessage(error),'ani')}
-  finally{transcribing=false;micButton.classList.remove('transcribing')}
+  const response=await fetch('/api/stt',{method:'POST',headers:{'content-type':blob.type||'application/octet-stream'},body:blob});
+  const data=await response.json();
+  if(!response.ok){if(response.status!==422)throw new Error(data.detail||'Transcription indisponible');return}
+  appendTranscript(data.text);
+}
+
+function queueTranscription(blob){
+  queuedTranscriptions++;transcribing=true;micButton.classList.add('transcribing');
+  transcriptionQueue=transcriptionQueue
+    .then(()=>transcribeUtterance(blob))
+    .catch(error=>bubble(microphoneErrorMessage(error),'ani'))
+    .finally(()=>{
+      queuedTranscriptions--;
+      if(!queuedTranscriptions){transcribing=false;micButton.classList.remove('transcribing')}
+      scheduleTranscriptCommit();
+    });
 }
 
 function startUtterance(){
-  if(!microphoneMode||transcribing||utteranceRecorder)return;
+  if(!microphoneMode||utteranceRecorder)return;
+  clearTimeout(transcriptCommitTimer);transcriptCommitTimer=null;
+  if(aniTurnActive)cancelActiveAniTurn({removeBubble:true});
   utteranceChunks=[];discardRecording=false;
   const mimeType=recorderMimeType();
   utteranceRecorder=new MediaRecorder(micStream,mimeType?{mimeType}:undefined);
@@ -185,7 +254,7 @@ function startUtterance(){
     const type=utteranceRecorder?.mimeType||mimeType||'application/octet-stream';
     const blob=new Blob(utteranceChunks,{type});
     utteranceRecorder=null;utteranceChunks=[];
-    if(!discardRecording&&blob.size>0)transcribeUtterance(blob);
+    if(!discardRecording&&blob.size>0)queueTranscription(blob);
   };
   speechStarted=performance.now();silenceStarted=0;
   utteranceRecorder.start(200);
@@ -200,10 +269,10 @@ function monitorVoiceActivity(){
   const now=performance.now();
   if(rms>0.028){
     silenceStarted=0;
-    if(!utteranceRecorder&&!transcribing)startUtterance();
+    if(!utteranceRecorder)startUtterance();
   }else if(utteranceRecorder?.state==='recording'&&now-speechStarted>400){
     if(!silenceStarted)silenceStarted=now;
-    if(now-silenceStarted>850)utteranceRecorder.stop();
+    if(now-silenceStarted>END_OF_SPEECH_SILENCE_MS)utteranceRecorder.stop();
   }
   if(utteranceRecorder?.state==='recording'&&now-speechStarted>20000)utteranceRecorder.stop();
   micFrame=requestAnimationFrame(monitorVoiceActivity);
@@ -236,6 +305,7 @@ async function startMicrophoneMode(){
 
 function stopMicrophoneMode(remember=false){
   microphoneMode=false;discardRecording=true;
+  clearTimeout(transcriptCommitTimer);transcriptCommitTimer=null;pendingTranscript='';
   if(remember){microphonePreferred=false;localStorage.setItem('ani.microphone','off')}
   if(micFrame)cancelAnimationFrame(micFrame);micFrame=null;
   if(utteranceRecorder?.state==='recording')utteranceRecorder.stop();
