@@ -1,0 +1,22 @@
+[Unit]
+Description=Ani Companion PWA
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/francois/ani-companion
+Environment="HERMES_HOME=/home/francois/.hermes/profiles/ani"
+Environment="PATH=/home/francois/.hermes/hermes-agent/venv/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="ANI_QWEN_TTS_URL=http://127.0.0.1:15004/v1/audio/speech"
+Environment="ANI_QWEN_TTS_VOICE=Serena"
+ExecStart=/home/francois/.hermes/hermes-agent/venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port 8787
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/home/francois/.hermes/profiles/ani /home/francois/ani-companion
+
+[Install]
+WantedBy=default.target

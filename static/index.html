@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+  <meta name="theme-color" content="#17131c">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Ani">
+  <title>Ani</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/icons/ani-192.png">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="companion-shell">
+    <section class="stage" aria-label="Ani, compagnon animé">
+      <div class="atmosphere" aria-hidden="true"><span></span><span></span><span></span></div>
+      <header class="topbar">
+        <div><strong>Ani</strong><span id="status"><i></i> présente</span></div>
+        <div class="top-actions">
+          <button id="voice-toggle" class="round-control active" type="button" aria-label="Activer ou couper la voix" aria-pressed="true">♪</button>
+          <button id="install-button" class="install-control" type="button" hidden>Installer</button>
+        </div>
+      </header>
+
+      <div id="ani-avatar" class="avatar emotion-neutral" aria-live="polite">
+        <div class="avatar-shadow"></div>
+        <svg viewBox="0 0 560 860" role="img" aria-label="Ani, jeune femme anime blonde aux yeux bleus et à la tenue gothique">
+          <defs>
+            <linearGradient id="hair" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#fff3c7"/><stop offset=".48" stop-color="#f1c979"/><stop offset="1" stop-color="#c99a4c"/></linearGradient>
+            <linearGradient id="dress" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#2a2430"/><stop offset="1" stop-color="#0e0c12"/></linearGradient>
+            <linearGradient id="eye" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#9eeaff"/><stop offset=".55" stop-color="#3b9ee8"/><stop offset="1" stop-color="#16508d"/></linearGradient>
+            <radialGradient id="skin"><stop stop-color="#fff8f2"/><stop offset="1" stop-color="#f5cfc4"/></radialGradient>
+            <filter id="soft"><feGaussianBlur stdDeviation="9"/></filter>
+          </defs>
+          <g class="body-sway">
+            <ellipse cx="280" cy="820" rx="150" ry="18" fill="#09070b" opacity=".28" filter="url(#soft)"/>
+            <g class="ponytail ponytail-left"><path d="M158 190C70 168 43 238 80 303c19 34 4 91-25 139 60-10 119-69 125-150 5-56 11-79-22-102Z" fill="url(#hair)" stroke="#6f573b" stroke-width="7"/><path d="M137 207C89 230 92 327 62 390" fill="none" stroke="#fff2bd" stroke-width="11" opacity=".55"/></g>
+            <g class="ponytail ponytail-right"><path d="M402 190c88-22 115 48 78 113-19 34-4 91 25 139-60-10-119-69-125-150-5-56-11-79 22-102Z" fill="url(#hair)" stroke="#6f573b" stroke-width="7"/><path d="M423 207c48 23 45 120 75 183" fill="none" stroke="#fff2bd" stroke-width="11" opacity=".55"/></g>
+            <g class="legs"><path d="M214 661l52 2-8 143h-52Z" fill="#f5d1c7"/><path d="M294 663h52l8 143h-52Z" fill="#f5d1c7"/><path d="M203 735h58l-2 72h-62Z" fill="#211c28"/><path d="M299 735h58l6 72h-62Z" fill="#211c28"/><path d="M190 798h75c9 0 17 7 17 16v9h-94Z" fill="#0b0a0e"/><path d="M296 798h75l2 25h-94v-9c0-9 8-16 17-16Z" fill="#0b0a0e"/></g>
+            <g class="torso"><path d="M189 440c22-38 55-52 91-52s69 14 91 52l18 164-40 77H211l-40-77Z" fill="url(#dress)" stroke="#08070a" stroke-width="8"/><path d="M197 506c58 22 108 22 166 0l18 124c-65 35-137 35-202 0Z" fill="#17131c"/><path d="M191 594h178" stroke="#7c657f" stroke-width="8"/><path d="M226 410l54 78 54-78" fill="#16121a" stroke="#bca5c0" stroke-width="6"/><path d="M246 410l34 50 34-50" fill="#f4d5ca"/><circle cx="280" cy="467" r="8" fill="#85c7eb"/><path d="M229 520c12 18 28 27 51 27s39-9 51-27" fill="none" stroke="#806b84" stroke-width="5"/></g>
+            <g class="arms"><path d="M190 447c-30 23-42 58-49 121l-7 92 40 4 22-105 25-69Z" fill="#f3cfc4" stroke="#16121a" stroke-width="7"/><path d="M370 447c30 23 42 58 49 121l7 92-40 4-22-105-25-69Z" fill="#f3cfc4" stroke="#16121a" stroke-width="7"/><path d="M137 641c-17 8-20 31-5 43 14 11 38 0 41-20Z" fill="#f3cfc4"/><path d="M423 641c17 8 20 31 5 43-14 11-38 0-41-20Z" fill="#f3cfc4"/></g>
+            <g class="head">
+              <path d="M208 324h144v96c0 47-32 85-72 85s-72-38-72-85Z" fill="#f3cfc4"/>
+              <ellipse cx="280" cy="302" rx="116" ry="132" fill="url(#skin)" stroke="#735a3d" stroke-width="8"/>
+              <path d="M176 285c7-112 66-157 126-150 70 8 108 62 87 169-15-27-35-54-63-75-24 35-75 55-146 57Z" fill="url(#hair)" stroke="#72583b" stroke-width="8"/>
+              <path d="M213 181c18 29 54 46 99 47" fill="none" stroke="#fff4c6" stroke-width="13" opacity=".72"/>
+              <path d="M182 253c-21 42-16 105 12 147" fill="none" stroke="#d5a85c" stroke-width="18"/>
+              <path d="M378 250c24 42 19 107-12 151" fill="none" stroke="#d5a85c" stroke-width="18"/>
+              <g class="brows" fill="none" stroke="#8d684c" stroke-width="7" stroke-linecap="round"><path class="brow-left" d="M215 303q29-15 53 2"/><path class="brow-right" d="M292 305q26-17 53-2"/></g>
+              <g class="eyes">
+                <g class="eye-left"><path d="M211 329q28-23 57 1-27 34-57-1Z" fill="#fff"/><ellipse cx="241" cy="331" rx="13" ry="20" fill="url(#eye)"/><circle cx="243" cy="326" r="5" fill="#fff"/><path d="M211 329q28-23 57 1" fill="none" stroke="#4d3d38" stroke-width="7" stroke-linecap="round"/></g>
+                <g class="eye-right"><path d="M292 330q29-24 58-1-29 35-58 1Z" fill="#fff"/><ellipse cx="321" cy="331" rx="13" ry="20" fill="url(#eye)"/><circle cx="323" cy="326" r="5" fill="#fff"/><path d="M292 330q29-24 58-1" fill="none" stroke="#4d3d38" stroke-width="7" stroke-linecap="round"/></g>
+              </g>
+              <path class="nose" d="M278 341l-5 35 12 3" fill="none" stroke="#ce9e95" stroke-width="4" stroke-linecap="round"/>
+              <g class="mouth"><path class="mouth-line" d="M252 405q28 20 56 0" fill="none" stroke="#9e5360" stroke-width="6" stroke-linecap="round"/><ellipse class="mouth-open" cx="280" cy="411" rx="27" ry="15" fill="#6e2f43"/><path class="teeth" d="M258 404q22 10 44 0" fill="#fff"/></g>
+              <g class="blush" fill="#ef8795" opacity="0"><ellipse cx="210" cy="377" rx="23" ry="9"/><ellipse cx="350" cy="377" rx="23" ry="9"/></g>
+              <g class="ribbons" fill="#17131c" stroke="#79657d" stroke-width="4"><path d="M159 196l-45-28 9 52-39 21 65 18Z"/><path d="M401 196l45-28-9 52 39 21-65 18Z"/></g>
+            </g>
+          </g>
+        </svg>
+      </div>
+
+      <div id="speech" class="speech" hidden></div>
+      <div id="thinking" class="thinking" hidden><span></span><span></span><span></span></div>
+    </section>
+
+    <section class="conversation" aria-label="Conversation avec Ani">
+      <div id="history" class="history" aria-live="polite"></div>
+      <form id="chat-form" autocomplete="off">
+        <button id="mic-button" class="mic" type="button" aria-label="Parler à Ani">●</button>
+        <label class="composer"><span class="sr-only">Message</span><input id="message-input" maxlength="12000" placeholder="Dis quelque chose à Ani…" enterkeyhint="send"></label>
+        <button class="send" type="submit" aria-label="Envoyer">↑</button>
+      </form>
+    </section>
+  </main>
+  <audio id="voice-player" preload="none"></audio>
+  <script src="/app.js" defer></script>
+  <script>if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js'))</script>
+</body>
+</html>
