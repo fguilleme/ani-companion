@@ -151,7 +151,7 @@ def _delete_file(path: str):
         pass
 
 
-def build_qwen_tts_request(text: str) -> urllib.request.Request:
+def build_qwen_tts_request(text: str, instructions: str = '') -> urllib.request.Request:
     payload = {
         'model': 'qwen-tts',
         'voice': QWEN_TTS_VOICE,
@@ -161,6 +161,8 @@ def build_qwen_tts_request(text: str) -> urllib.request.Request:
         'temperature': 0.15,
         'top_p': 0.8,
     }
+    if instructions:
+        payload['instructions'] = instructions
     return urllib.request.Request(
         QWEN_TTS_URL,
         data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
@@ -169,8 +171,8 @@ def build_qwen_tts_request(text: str) -> urllib.request.Request:
     )
 
 
-def _fetch_qwen_audio(text: str) -> bytes:
-    with urllib.request.urlopen(build_qwen_tts_request(text), timeout=180) as response:
+def _fetch_qwen_audio(text: str, instructions: str = '') -> bytes:
+    with urllib.request.urlopen(build_qwen_tts_request(text, instructions), timeout=180) as response:
         audio = response.read()
     if not audio:
         raise RuntimeError('Qwen TTS returned empty audio')
@@ -179,7 +181,7 @@ def _fetch_qwen_audio(text: str) -> bytes:
 
 def prepare_spoken_text(text: str) -> str:
     spoken = re.sub(r'^\([^)]+\)\s*', '', text.strip())
-    spoken = re.sub(r'\[([^\]]+)\]', r'\1 : ', spoken)
+    spoken = re.sub(r'\[[^\]]+\]', ' ', spoken)
     spoken = re.sub(r'(?:\.{2,}|…)', ', ', spoken)
     spoken = re.sub(r'([.!?])\s*\1+', r'\1', spoken)
     spoken = ''.join(char for char in spoken if unicodedata.category(char) != 'So')
@@ -187,15 +189,23 @@ def prepare_spoken_text(text: str) -> str:
     return re.sub(r'\s+', ' ', spoken).strip()
 
 
+def extract_tts_instructions(text: str) -> str:
+    directions = [part.strip() for part in re.findall(r'\[([^\]]+)\]', text) if part.strip()]
+    if not directions:
+        return ''
+    return 'Interprète naturellement les indications suivantes sans les prononcer : ' + ' ; '.join(directions) + '.'
+
+
 @app.post('/api/tts')
 async def tts(payload: TTSRequest, background_tasks: BackgroundTasks):
     spoken = prepare_spoken_text(payload.text)
+    instructions = extract_tts_instructions(payload.text)
     if not spoken:
         raise HTTPException(status_code=422, detail='Aucun texte à prononcer.')
     fd, path = tempfile.mkstemp(prefix='ani-', suffix='.wav')
     os.close(fd)
     try:
-        audio = await asyncio.to_thread(_fetch_qwen_audio, spoken)
+        audio = await asyncio.to_thread(_fetch_qwen_audio, spoken, instructions)
         Path(path).write_bytes(audio)
     except Exception as exc:
         _delete_file(path)

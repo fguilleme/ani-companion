@@ -59,13 +59,19 @@ class AniCompanionTests(unittest.TestCase):
         self.assertNotEqual(happy['rate'], sad['rate'])
         self.assertNotEqual(happy['pitch'], sad['pitch'])
 
-    def test_prepare_spoken_text_preserves_bracketed_emotions(self):
+    def test_prepare_spoken_text_removes_bracketed_emotions(self):
         spoken = app_module.prepare_spoken_text(
             '(Français) [sourit doucement] Bonjour François. [petit rire] Je suis là.'
         )
+        self.assertEqual(spoken, 'Bonjour François. Je suis là.')
+
+    def test_extract_tts_instructions_keeps_bracketed_emotions(self):
+        instructions = app_module.extract_tts_instructions(
+            '[sourit doucement] Bonjour François. [petit rire] Je suis là.'
+        )
         self.assertEqual(
-            spoken,
-            'sourit doucement : Bonjour François. petit rire : Je suis là.',
+            instructions,
+            'Interprète naturellement les indications suivantes sans les prononcer : sourit doucement ; petit rire.',
         )
 
     def test_prepare_spoken_text_normalizes_ellipses_and_removes_emoji(self):
@@ -75,12 +81,13 @@ class AniCompanionTests(unittest.TestCase):
         self.assertEqual(spoken, 'Oh, attends, je termine cette phrase.')
 
     def test_qwen_tts_request_uses_local_server_and_french_voice(self):
-        request = build_qwen_tts_request('Bonjour François.')
+        request = build_qwen_tts_request('Bonjour François.', 'Parle avec joie.')
         self.assertEqual(request.full_url, 'http://127.0.0.1:15004/v1/audio/speech')
         payload = json.loads(request.data)
         self.assertEqual(payload['model'], 'qwen-tts')
         self.assertEqual(payload['voice'], 'Serena')
         self.assertEqual(payload['input'], 'Bonjour François.')
+        self.assertEqual(payload['instructions'], 'Parle avec joie.')
         self.assertEqual(payload['response_format'], 'wav')
         self.assertIs(payload['force_chunking'], True)
 
