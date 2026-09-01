@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import re
 import tempfile
+import unicodedata
 import urllib.request
 
 from fastapi import FastAPI, HTTPException
@@ -179,7 +180,10 @@ def _fetch_qwen_audio(text: str) -> bytes:
 def prepare_spoken_text(text: str) -> str:
     spoken = re.sub(r'^\([^)]+\)\s*', '', text.strip())
     spoken = re.sub(r'\[([^\]]+)\]', r'\1 : ', spoken)
+    spoken = re.sub(r'(?:\.{2,}|…)', ', ', spoken)
     spoken = re.sub(r'([.!?])\s*\1+', r'\1', spoken)
+    spoken = ''.join(char for char in spoken if unicodedata.category(char) != 'So')
+    spoken = re.sub(r'\s+([,.!?])', r'\1', spoken)
     return re.sub(r'\s+', ' ', spoken).strip()
 
 

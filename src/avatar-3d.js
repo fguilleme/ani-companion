@@ -1,6 +1,9 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
+
+const HEAD_SHOT_HEIGHT_RATIO = 0.23;
 
 const canvas = document.getElementById('avatar-canvas');
 const loading = document.getElementById('avatar-loading');
@@ -14,6 +17,14 @@ renderer.toneMappingExposure = 1.08;
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(28, 1, 0.01, 100);
 const clock = new THREE.Clock();
+const controls = new OrbitControls(camera, canvas);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.enablePan = false;
+controls.rotateSpeed = 0.55;
+controls.zoomSpeed = 0.75;
+controls.minPolarAngle = Math.PI * 0.32;
+controls.maxPolarAngle = Math.PI * 0.68;
 const lookTarget = new THREE.Object3D();
 scene.add(lookTarget);
 scene.add(new THREE.HemisphereLight(0xfff1e8, 0x382c45, 2.2));
@@ -29,6 +40,12 @@ let mouthOpen = 0;
 let activeEmotion = null;
 let blinkStart = -1;
 let nextBlink = 2.4;
+let activeEmotionValue = 0;
+let cameraReturnTimer = null;
+let cameraReturning = false;
+let touchPoint = null;
+const defaultCameraPosition = new THREE.Vector3();
+const defaultCameraTarget = new THREE.Vector3();
 const idleBones = {};
 const emotionMap = {
   neutral: null,
@@ -47,6 +64,7 @@ function setEmotion(name = 'neutral') {
   if (activeEmotion) expression(activeEmotion, 0);
   const selected = emotionMap[name] || null;
   activeEmotion = selected?.[0] || null;
+  activeEmotionValue = selected?.[1] || 0;
   if (selected) expression(selected[0], selected[1]);
 }
 
@@ -74,12 +92,52 @@ function frameModel(model) {
   const box = new THREE.Box3().setFromObject(model.scene);
   const size = box.getSize(new THREE.Vector3());
   const center = box.getCenter(new THREE.Vector3());
-  const distance = size.y / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2)) * 1.04;
-  camera.position.set(center.x, center.y + size.y * 0.015, center.z + distance);
-  camera.lookAt(center.x, center.y + size.y * 0.015, center.z);
-  lookTarget.position.set(camera.position.x, center.y + size.y * 0.18, camera.position.z);
+  const visibleHeight = size.y * HEAD_SHOT_HEIGHT_RATIO;
+  const targetY = box.max.y - visibleHeight * 0.48;
+  const distance = visibleHeight / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2)) * 1.04;
+  defaultCameraTarget.set(center.x, targetY, center.z);
+  defaultCameraPosition.set(center.x, targetY, center.z + distance);
+  camera.position.copy(defaultCameraPosition);
+  controls.target.copy(defaultCameraTarget);
+  controls.minDistance = distance * 0.72;
+  controls.maxDistance = distance * 1.45;
+  controls.update();
+  lookTarget.position.set(camera.position.x, box.max.y - size.y * 0.11, camera.position.z);
   if (model.lookAt) model.lookAt.target = lookTarget;
 }
+
+function scheduleCameraReturn(delay = 1300) {
+  clearTimeout(cameraReturnTimer);
+  cameraReturnTimer = setTimeout(() => { cameraReturning = true; }, delay);
+}
+
+controls.addEventListener('start', () => {
+  clearTimeout(cameraReturnTimer);
+  cameraReturning = false;
+});
+controls.addEventListener('end', () => scheduleCameraReturn());
+
+function reactToTouch() {
+  expression('happy', 0.95);
+  setTimeout(() => {
+    expression('happy', 0);
+    if (activeEmotion) expression(activeEmotion, activeEmotionValue);
+  }, 700);
+}
+
+canvas.addEventListener('pointerdown', (event) => {
+  if (!event.isPrimary) { touchPoint = null; return; }
+  touchPoint = { id: event.pointerId, x: event.clientX, y: event.clientY, at: performance.now(), moved: false };
+});
+canvas.addEventListener('pointermove', (event) => {
+  if (!touchPoint || event.pointerId !== touchPoint.id) return;
+  if (Math.hypot(event.clientX - touchPoint.x, event.clientY - touchPoint.y) > 9) touchPoint.moved = true;
+});
+canvas.addEventListener('pointerup', (event) => {
+  if (touchPoint && event.pointerId === touchPoint.id && !touchPoint.moved && performance.now() - touchPoint.at < 450) reactToTouch();
+  touchPoint = null;
+});
+canvas.addEventListener('pointercancel', () => { touchPoint = null; });
 
 function resize() {
   const width = Math.max(container.clientWidth, 1);
@@ -136,6 +194,17 @@ function updateMouth(elapsed) {
 renderer.setAnimationLoop(() => {
   const delta = Math.min(clock.getDelta(), 0.05);
   const elapsed = clock.elapsedTime;
+  if (cameraReturning) {
+    const blend = 1 - Math.exp(-delta * 4.2);
+    camera.position.lerp(defaultCameraPosition, blend);
+    controls.target.lerp(defaultCameraTarget, blend);
+    if (camera.position.distanceTo(defaultCameraPosition) < 0.002 && controls.target.distanceTo(defaultCameraTarget) < 0.002) {
+      camera.position.copy(defaultCameraPosition);
+      controls.target.copy(defaultCameraTarget);
+      cameraReturning = false;
+    }
+  }
+  controls.update();
   if (vrm) {
     updateBlink(elapsed);
     updateMouth(elapsed);
@@ -151,4 +220,8 @@ renderer.setAnimationLoop(() => {
   renderer.render(scene, camera);
 });
 
-window.aniAvatar = { setEmotion, setMouthOpen };
+function getCameraState() {
+  return { position: camera.position.toArray(), target: controls.target.toArray() };
+}
+
+window.aniAvatar = { setEmotion, setMouthOpen, reactToTouch, getCameraState };

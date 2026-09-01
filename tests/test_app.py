@@ -68,6 +68,12 @@ class AniCompanionTests(unittest.TestCase):
             'sourit doucement : Bonjour François. petit rire : Je suis là.',
         )
 
+    def test_prepare_spoken_text_normalizes_ellipses_and_removes_emoji(self):
+        spoken = app_module.prepare_spoken_text(
+            'Oh… attends... je termine cette phrase. 💙'
+        )
+        self.assertEqual(spoken, 'Oh, attends, je termine cette phrase.')
+
     def test_qwen_tts_request_uses_local_server_and_french_voice(self):
         request = build_qwen_tts_request('Bonjour François.')
         self.assertEqual(request.full_url, 'http://127.0.0.1:15004/v1/audio/speech')
@@ -102,13 +108,44 @@ class AniCompanionTests(unittest.TestCase):
     def test_mouth_animation_follows_audio_amplitude(self):
         script = (ROOT / 'static' / 'app.js').read_text()
         css = (ROOT / 'static' / 'style.css').read_text()
-        self.assertIn('createMediaElementSource', script)
-        self.assertIn('getByteTimeDomainData', script)
+        self.assertNotIn('createMediaElementSource', script)
+        self.assertIn('decodeAudioData', script)
+        self.assertIn('player.currentTime', script)
         self.assertIn('window.aniAvatar?.setMouthOpen', script)
         self.assertNotIn('animation:talk', css)
 
+    def test_submit_hides_keyboard_and_unlocks_mobile_audio(self):
+        script = (ROOT / 'static' / 'app.js').read_text()
+        html = (ROOT / 'static' / 'index.html').read_text()
+        self.assertIn('input.blur()', script)
+        self.assertIn('unlockAudio()', script)
+        self.assertIn('SILENT_WAV', script)
+        self.assertIn('autocomplete="off"', html)
+        self.assertIn('autocorrect="off"', html)
+        self.assertIn('spellcheck="false"', html)
+
+    def test_avatar_camera_uses_half_body_framing(self):
+        source = (ROOT / 'src' / 'avatar-3d.js').read_text()
+        self.assertIn('HEAD_SHOT_HEIGHT_RATIO = 0.23', source)
+
+    def test_avatar_supports_touch_orbit_zoom_and_auto_return(self):
+        source = (ROOT / 'src' / 'avatar-3d.js').read_text()
+        css = (ROOT / 'static' / 'style.css').read_text()
+        self.assertIn('OrbitControls', source)
+        self.assertIn('scheduleCameraReturn', source)
+        self.assertIn('getCameraState', source)
+        self.assertIn("canvas.addEventListener('pointerup'", source)
+        self.assertIn('touch-action:none', css)
+
+    def test_microphone_permission_and_errors_are_handled(self):
+        script = (ROOT / 'static' / 'app.js').read_text()
+        self.assertIn('navigator.mediaDevices.getUserMedia', script)
+        self.assertIn('recognition.onerror', script)
+        self.assertIn('Microphone refusé', script)
+
     def test_service_worker_precaches_avatar_runtime(self):
         worker = (ROOT / 'static' / 'sw.js').read_text()
+        self.assertIn("const CACHE='ani-companion-v5'", worker)
         self.assertIn("'/avatar-3d.bundle.js'", worker)
 
     def test_manifest_is_installable_pwa(self):
