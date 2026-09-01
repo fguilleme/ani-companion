@@ -21,7 +21,7 @@ function setEmotion(emotion='neutral'){
 function bubble(text,who){const el=document.createElement('div');el.className=`bubble ${who}`;el.textContent=text;history.appendChild(el);history.scrollTop=history.scrollHeight}
 let speechAnimation=null;
 function hideSpeech(){speechAnimation?.cancel();speechAnimation=null;speech.hidden=true}
-function showSpeech(text){
+function showSpeech(text,durationSeconds=0){
   const clean=text.replace(/^\([^)]+\)\s*/,'').replace(/\[[^\]]+\]/g,' ').replace(/\s+/g,' ').trim();
   const ticker=document.createElement('span');ticker.className='speech-line';ticker.textContent=clean;
   speech.replaceChildren(ticker);speech.hidden=false;speechAnimation?.cancel();
@@ -30,7 +30,7 @@ function showSpeech(text){
     const distance=ticker.scrollWidth-speech.clientWidth+24;
     speechAnimation=ticker.animate(
       [{transform:'translateX(0)'},{transform:`translateX(-${distance}px)`}],
-      {duration:Math.max(7000,distance*28),iterations:1,easing:'linear',fill:'forwards'},
+      {duration:Number.isFinite(durationSeconds)&&durationSeconds>0?Math.max(1000,durationSeconds*1000):Math.max(7000,distance*28),iterations:1,easing:'linear',fill:'forwards'},
     );
   });
 }
@@ -105,6 +105,7 @@ async function speak(text,emotion){
   const envelopePromise=buildAudioEnvelope(blob);
   avatar.classList.add('speaking');
   await player.play();
+  showSpeech(text,player.duration);
   startLipSync(await envelopePromise);
 }
 player.addEventListener('ended',()=>{stopLipSync();hideSpeech()});
@@ -117,8 +118,8 @@ form.addEventListener('submit',async event=>{
     const response=await fetch('/api/chat',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message,session_id:localStorage.getItem('ani.session')})});
     const data=await response.json();if(!response.ok)throw new Error(data.detail||'Ani ne répond pas');
     if(data.session_id)localStorage.setItem('ani.session',data.session_id);
-    thinking.hidden=true;setEmotion(data.emotion);showSpeech(data.reply);
-    await speak(data.reply,data.emotion);
+    thinking.hidden=true;setEmotion(data.emotion);
+    if(voiceEnabled)await speak(data.reply,data.emotion);else showSpeech(data.reply);
   }catch(error){thinking.hidden=true;setEmotion('sad');bubble(error.message,'ani')}
 });
 voiceToggle.addEventListener('click',()=>{voiceEnabled=!voiceEnabled;localStorage.setItem('ani.voice',voiceEnabled?'on':'off');voiceToggle.classList.toggle('active',voiceEnabled);voiceToggle.setAttribute('aria-pressed',String(voiceEnabled));if(!voiceEnabled)player.pause()});

@@ -68,9 +68,17 @@ await page.evaluate(() => { window.aniAvatar.setEmotion('happy'); window.aniAvat
 await page.waitForTimeout(250);
 await page.screenshot({ path: 'test-artifacts/avatar-3d-speaking.png', fullPage: true });
 await page.route('**/api/chat', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ reply: 'Voici une réponse volontairement longue qui doit défiler sur une seule ligne sans jamais masquer le visage d’Ani.', emotion: 'happy', session_id: 'browser-test' }) }));
-await page.route('**/api/tts', route => route.fulfill({ status: 200, contentType: 'audio/wav', body: toneWav() }));
+let resolveTtsRequested;
+const ttsRequested = new Promise(resolve => { resolveTtsRequested = resolve; });
+await page.route('**/api/tts', async route => {
+  resolveTtsRequested();
+  await new Promise(resolve => setTimeout(resolve, 700));
+  await route.fulfill({ status: 200, contentType: 'audio/wav', body: toneWav() });
+});
 await page.locator('#message-input').fill('Ferme le clavier');
 await page.locator('button.send').click();
+await ttsRequested;
+const tickerHiddenBeforeAudio = await page.locator('#speech').getAttribute('hidden') !== null;
 await page.waitForFunction(() => document.getElementById('voice-player').currentTime > 0.05, null, { timeout: 10000 });
 const mobileInputAudio = await page.evaluate(() => ({
   keyboardDismissed: document.activeElement !== document.getElementById('message-input'),
@@ -80,12 +88,14 @@ const mobileInputAudio = await page.evaluate(() => ({
   assistantHistoryBubbles: document.querySelectorAll('.bubble.ani').length,
   tickerWhiteSpace: getComputedStyle(document.querySelector('.speech-line')).whiteSpace,
   tickerHeight: document.getElementById('speech').getBoundingClientRect().height,
+  tickerDuration: document.querySelector('.speech-line').getAnimations()[0]?.effect.getTiming().duration,
 }));
+mobileInputAudio.tickerHiddenBeforeAudio = tickerHiddenBeforeAudio;
 await page.screenshot({ path: 'test-artifacts/avatar-3d-ticker.png', fullPage: true });
 console.log(JSON.stringify({ mobileProfile, state, orbit, mobileInputAudio, resources, errors }, null, 2));
 if (!state.ready || !state.loadingHidden || state.renderedPngBytes < 10000) process.exitCode = 2;
 if (orbit.moved < 0.01 || orbit.returned > 0.02) process.exitCode = 6;
-if (!mobileInputAudio.keyboardDismissed || !mobileInputAudio.audioPlaying || mobileInputAudio.audioTime <= 0.05 || !mobileInputAudio.microphoneContinuous || mobileInputAudio.assistantHistoryBubbles !== 0 || mobileInputAudio.tickerWhiteSpace !== 'nowrap' || mobileInputAudio.tickerHeight > 31) process.exitCode = 5;
+if (!mobileInputAudio.keyboardDismissed || !mobileInputAudio.audioPlaying || mobileInputAudio.audioTime <= 0.05 || !mobileInputAudio.microphoneContinuous || mobileInputAudio.assistantHistoryBubbles !== 0 || mobileInputAudio.tickerWhiteSpace !== 'nowrap' || mobileInputAudio.tickerHeight > 31 || !mobileInputAudio.tickerHiddenBeforeAudio || Math.abs(mobileInputAudio.tickerDuration - 1000) > 100) process.exitCode = 5;
 if (resources.some((resource) => resource.status !== 200) || resources.length < 2) process.exitCode = 3;
 if (errors.length) process.exitCode = 4;
 await page.locator('#mic-button').click();

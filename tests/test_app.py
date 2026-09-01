@@ -191,6 +191,12 @@ class AniCompanionTests(unittest.TestCase):
         self.assertIn("fill:'forwards'", script)
         self.assertIn('white-space:nowrap', css)
 
+    def test_ticker_starts_with_audio_playback_and_uses_wav_duration(self):
+        script = (ROOT / 'static' / 'app.js').read_text()
+        self.assertNotIn('setEmotion(data.emotion);showSpeech(data.reply)', script)
+        self.assertIn('await player.play();\n  showSpeech(text,player.duration);', script)
+        self.assertIn('durationSeconds*1000', script)
+
     def test_local_stt_endpoint_returns_whisper_transcript(self):
         client = TestClient(app)
         with patch.object(app_module, 'transcribe_local_audio', new=AsyncMock(return_value='Bonjour Ani.')):
@@ -205,7 +211,7 @@ class AniCompanionTests(unittest.TestCase):
 
     def test_service_worker_precaches_avatar_runtime(self):
         worker = (ROOT / 'static' / 'sw.js').read_text()
-        self.assertIn("const CACHE='ani-companion-v7'", worker)
+        self.assertIn("const CACHE='ani-companion-v8'", worker)
         self.assertIn("'/avatar-3d.bundle.js'", worker)
 
     def test_manifest_is_installable_pwa(self):
