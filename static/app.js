@@ -19,7 +19,21 @@ function setEmotion(emotion='neutral'){
   window.aniAvatar?.setEmotion(emotion);
 }
 function bubble(text,who){const el=document.createElement('div');el.className=`bubble ${who}`;el.textContent=text;history.appendChild(el);history.scrollTop=history.scrollHeight}
-function showSpeech(text){speech.textContent=text.replace(/^\([^)]+\)\s*/,'');speech.hidden=false;clearTimeout(showSpeech.timer);showSpeech.timer=setTimeout(()=>speech.hidden=true,9000)}
+let speechAnimation=null;
+function hideSpeech(){speechAnimation?.cancel();speechAnimation=null;speech.hidden=true}
+function showSpeech(text){
+  const clean=text.replace(/^\([^)]+\)\s*/,'').replace(/\[[^\]]+\]/g,' ').replace(/\s+/g,' ').trim();
+  const ticker=document.createElement('span');ticker.className='speech-line';ticker.textContent=clean;
+  speech.replaceChildren(ticker);speech.hidden=false;speechAnimation?.cancel();
+  requestAnimationFrame(()=>{
+    if(ticker.scrollWidth<=speech.clientWidth){ticker.style.width='100%';ticker.style.textAlign='center';return}
+    const distance=ticker.scrollWidth-speech.clientWidth+24;
+    speechAnimation=ticker.animate(
+      [{transform:'translateX(0)'},{transform:`translateX(-${distance}px)`}],
+      {duration:Math.max(7000,distance*28),iterations:1,easing:'linear',fill:'forwards'},
+    );
+  });
+}
 const ENVELOPE_FPS=60;
 const SILENT_WAV='data:audio/wav;base64,UklGRkQDAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YSADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==';
 let audioEnvelope=[];
@@ -93,7 +107,7 @@ async function speak(text,emotion){
   await player.play();
   startLipSync(await envelopePromise);
 }
-player.addEventListener('ended',stopLipSync);
+player.addEventListener('ended',()=>{stopLipSync();hideSpeech()});
 player.addEventListener('pause',stopLipSync);
 
 form.addEventListener('submit',async event=>{
@@ -103,7 +117,7 @@ form.addEventListener('submit',async event=>{
     const response=await fetch('/api/chat',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message,session_id:localStorage.getItem('ani.session')})});
     const data=await response.json();if(!response.ok)throw new Error(data.detail||'Ani ne répond pas');
     if(data.session_id)localStorage.setItem('ani.session',data.session_id);
-    thinking.hidden=true;setEmotion(data.emotion);bubble(data.reply,'ani');showSpeech(data.reply);
+    thinking.hidden=true;setEmotion(data.emotion);showSpeech(data.reply);
     await speak(data.reply,data.emotion);
   }catch(error){thinking.hidden=true;setEmotion('sad');bubble(error.message,'ani')}
 });
@@ -117,6 +131,9 @@ const microphoneErrorMessage=error=>{
   return error?.message||'La dictée vocale locale est momentanément indisponible.';
 };
 let microphoneMode=false;
+let microphonePreferred=localStorage.getItem('ani.microphone')==='on';
+let microphoneStarting=false;
+let preferredGestureArmed=false;
 let micStream=null;
 let micContext=null;
 let micAnalyser=null;
@@ -182,24 +199,33 @@ function monitorVoiceActivity(){
 }
 
 async function startMicrophoneMode(){
-  if(!window.isSecureContext||!navigator.mediaDevices?.getUserMedia)throw new Error('Microphone refusé : ouvre Ani avec une adresse HTTPS sécurisée.');
-  if(!window.MediaRecorder)throw new Error('Enregistrement audio indisponible dans ce navigateur.');
-  unlockAudio();
-  micStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
-  const AudioContext=window.AudioContext||window.webkitAudioContext;
-  micContext=new AudioContext();
-  await micContext.resume();
-  const source=micContext.createMediaStreamSource(micStream);
-  micAnalyser=micContext.createAnalyser();micAnalyser.fftSize=512;
-  micWaveform=new Uint8Array(micAnalyser.fftSize);source.connect(micAnalyser);
-  microphoneMode=true;
-  micButton.classList.add('listening');micButton.setAttribute('aria-pressed','true');
-  micButton.setAttribute('aria-label','Arrêter l’écoute continue');
-  monitorVoiceActivity();
+  if(microphoneMode||microphoneStarting)return;
+  microphoneStarting=true;
+  try{
+    if(!window.isSecureContext||!navigator.mediaDevices?.getUserMedia)throw new Error('Microphone refusé : ouvre Ani avec une adresse HTTPS sécurisée.');
+    if(!window.MediaRecorder)throw new Error('Enregistrement audio indisponible dans ce navigateur.');
+    unlockAudio();
+    micStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
+    const AudioContext=window.AudioContext||window.webkitAudioContext;
+    micContext=new AudioContext();
+    await micContext.resume();
+    const source=micContext.createMediaStreamSource(micStream);
+    micAnalyser=micContext.createAnalyser();micAnalyser.fftSize=512;
+    micWaveform=new Uint8Array(micAnalyser.fftSize);source.connect(micAnalyser);
+    microphoneMode=true;microphonePreferred=true;localStorage.setItem('ani.microphone','on');
+    micStream.getTracks().forEach(track=>track.addEventListener('ended',()=>{
+      if(microphoneMode){stopMicrophoneMode(false);armPreferredMicrophone()}
+    },{once:true}));
+    micButton.classList.remove('needs-gesture');
+    micButton.classList.add('listening');micButton.setAttribute('aria-pressed','true');
+    micButton.setAttribute('aria-label','Arrêter l’écoute continue');
+    monitorVoiceActivity();
+  }finally{microphoneStarting=false}
 }
 
-function stopMicrophoneMode(){
+function stopMicrophoneMode(remember=false){
   microphoneMode=false;discardRecording=true;
+  if(remember){microphonePreferred=false;localStorage.setItem('ani.microphone','off')}
   if(micFrame)cancelAnimationFrame(micFrame);micFrame=null;
   if(utteranceRecorder?.state==='recording')utteranceRecorder.stop();
   micStream?.getTracks().forEach(track=>track.stop());micStream=null;
@@ -208,12 +234,28 @@ function stopMicrophoneMode(){
   micButton.setAttribute('aria-label','Activer l’écoute continue');
 }
 
+async function resumePreferredMicrophone(){
+  preferredGestureArmed=false;micButton.classList.remove('needs-gesture');
+  if(!microphonePreferred||microphoneMode)return;
+  try{await startMicrophoneMode()}
+  catch(error){bubble(microphoneErrorMessage(error),'ani');armPreferredMicrophone()}
+}
+
+function armPreferredMicrophone(){
+  if(!microphonePreferred||microphoneMode||microphoneStarting||preferredGestureArmed)return;
+  preferredGestureArmed=true;micButton.classList.add('needs-gesture');
+  micButton.setAttribute('aria-label','Toucher l’écran pour réactiver le microphone');
+  document.addEventListener('pointerdown',resumePreferredMicrophone,{once:true,capture:true});
+}
+
 micButton.setAttribute('aria-pressed','false');
 micButton.addEventListener('click',async()=>{
-  if(microphoneMode){stopMicrophoneMode();return}
+  if(microphoneMode){stopMicrophoneMode(true);return}
   try{await startMicrophoneMode()}
-  catch(error){stopMicrophoneMode();bubble(microphoneErrorMessage(error),'ani')}
+  catch(error){stopMicrophoneMode(false);bubble(microphoneErrorMessage(error),'ani')}
 });
+armPreferredMicrophone();
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)armPreferredMicrophone()});
 
 window.addEventListener('beforeinstallprompt',event=>{event.preventDefault();deferredInstall=event;installButton.hidden=false});
 installButton.addEventListener('click',async()=>{if(!deferredInstall)return;deferredInstall.prompt();await deferredInstall.userChoice;deferredInstall=null;installButton.hidden=true});

@@ -161,6 +161,36 @@ class AniCompanionTests(unittest.TestCase):
         self.assertIn('noiseSuppression:true', script)
         self.assertIn('stopMicrophoneMode', script)
 
+    def test_iphone_restores_preferred_microphone_on_first_page_gesture(self):
+        script = (ROOT / 'static' / 'app.js').read_text()
+        self.assertIn("localStorage.getItem('ani.microphone')==='on'", script)
+        self.assertIn('armPreferredMicrophone', script)
+        self.assertIn("document.addEventListener('pointerdown',resumePreferredMicrophone", script)
+
+    def test_avatar_uses_dark_lighting_and_blue_irises(self):
+        source = (ROOT / 'src' / 'avatar-3d.js').read_text()
+        self.assertIn('renderer.toneMappingExposure = 0.82', source)
+        self.assertIn("material.name.includes('EyeIris')", source)
+        self.assertIn('0x4f8fc4', source)
+        self.assertIn('material.emissive.multiplyScalar(0.18)', source)
+        self.assertIn('material.color.multiplyScalar(0.72)', source)
+
+    def test_lip_sync_limits_wide_mouth_shapes(self):
+        source = (ROOT / 'src' / 'avatar-3d.js').read_text()
+        self.assertIn('MAX_MOUTH_OPEN = 0.40', source)
+        self.assertIn("expression('ih', mouthOpen * 0.08)", source)
+        self.assertIn("happy: ['happy', 0.45]", source)
+
+    def test_assistant_reply_uses_single_line_ticker_not_history_bubble(self):
+        script = (ROOT / 'static' / 'app.js').read_text()
+        css = (ROOT / 'static' / 'style.css').read_text()
+        self.assertNotIn("bubble(data.reply,'ani')", script)
+        self.assertIn("ticker.className='speech-line'", script)
+        self.assertIn('speech.replaceChildren(ticker)', script)
+        self.assertIn('ticker.scrollWidth<=speech.clientWidth', script)
+        self.assertIn("fill:'forwards'", script)
+        self.assertIn('white-space:nowrap', css)
+
     def test_local_stt_endpoint_returns_whisper_transcript(self):
         client = TestClient(app)
         with patch.object(app_module, 'transcribe_local_audio', new=AsyncMock(return_value='Bonjour Ani.')):
@@ -175,7 +205,7 @@ class AniCompanionTests(unittest.TestCase):
 
     def test_service_worker_precaches_avatar_runtime(self):
         worker = (ROOT / 'static' / 'sw.js').read_text()
-        self.assertIn("const CACHE='ani-companion-v6'", worker)
+        self.assertIn("const CACHE='ani-companion-v7'", worker)
         self.assertIn("'/avatar-3d.bundle.js'", worker)
 
     def test_manifest_is_installable_pwa(self):

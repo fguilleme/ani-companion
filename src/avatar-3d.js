@@ -4,6 +4,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
 
 const HEAD_SHOT_HEIGHT_RATIO = 0.23;
+const MAX_MOUTH_OPEN = 0.40;
 
 const canvas = document.getElementById('avatar-canvas');
 const loading = document.getElementById('avatar-loading');
@@ -12,7 +13,7 @@ const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true,
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.08;
+renderer.toneMappingExposure = 0.82;
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(28, 1, 0.01, 100);
@@ -27,11 +28,11 @@ controls.minPolarAngle = Math.PI * 0.32;
 controls.maxPolarAngle = Math.PI * 0.68;
 const lookTarget = new THREE.Object3D();
 scene.add(lookTarget);
-scene.add(new THREE.HemisphereLight(0xfff1e8, 0x382c45, 2.2));
-const keyLight = new THREE.DirectionalLight(0xfff4e9, 2.4);
+scene.add(new THREE.HemisphereLight(0xd8e4f0, 0x171523, 1.25));
+const keyLight = new THREE.DirectionalLight(0xe4e8f2, 1.45);
 keyLight.position.set(1.8, 2.8, 2.6);
 scene.add(keyLight);
-const rimLight = new THREE.DirectionalLight(0x72c9ff, 1.4);
+const rimLight = new THREE.DirectionalLight(0x5579a8, 0.75);
 rimLight.position.set(-2, 2, -1.5);
 scene.add(rimLight);
 
@@ -49,7 +50,7 @@ const defaultCameraTarget = new THREE.Vector3();
 const idleBones = {};
 const emotionMap = {
   neutral: null,
-  happy: ['happy', 0.72],
+  happy: ['happy', 0.45],
   sad: ['sad', 0.65],
   annoyed: ['angry', 0.55],
   curious: ['surprised', 0.3],
@@ -69,7 +70,25 @@ function setEmotion(name = 'neutral') {
 }
 
 function setMouthOpen(value = 0) {
-  mouthOpen = THREE.MathUtils.clamp((value - 0.16) / 1.09, 0, 1);
+  mouthOpen = THREE.MathUtils.clamp((value - 0.16) / 1.09, 0, 1) * MAX_MOUTH_OPEN;
+}
+
+function tuneMaterials(model) {
+  const visited = new Set();
+  model.scene.traverse((object) => {
+    const materials = Array.isArray(object.material) ? object.material : [object.material];
+    for (const material of materials) {
+      if (!material || visited.has(material)) continue;
+      visited.add(material);
+      if (material.name.includes('EyeIris')) material.color?.setHex(0x4f8fc4);
+      if (material.name.includes('HAIR') && material.emissive) {
+        material.color.multiplyScalar(0.72);
+        material.emissive.multiplyScalar(0.18);
+        material.emissiveIntensity = 0.35;
+      }
+      material.needsUpdate = true;
+    }
+  });
 }
 
 function poseNaturally(model) {
@@ -156,6 +175,7 @@ loader.load('/models/ani.vrm', (gltf) => {
   VRMUtils.removeUnnecessaryVertices(gltf.scene);
   VRMUtils.removeUnnecessaryJoints(gltf.scene);
   VRMUtils.rotateVRM0(vrm);
+  tuneMaterials(vrm);
   poseNaturally(vrm);
   scene.add(vrm.scene);
   frameModel(vrm);
@@ -185,10 +205,10 @@ function updateMouth(elapsed) {
   if (mouthOpen < 0.025) {
     expression('aa', 0); expression('ih', 0); expression('ou', 0); return;
   }
-  const phase = Math.floor(elapsed * 11) % 3;
-  expression('aa', mouthOpen * (phase === 0 ? 0.95 : 0.58));
-  expression('ih', mouthOpen * (phase === 1 ? 0.38 : 0.03));
-  expression('ou', mouthOpen * (phase === 2 ? 0.4 : 0.03));
+  const phase = Math.floor(elapsed * 9) % 3;
+  expression('aa', mouthOpen * (phase === 0 ? 0.82 : 0.48));
+  expression('ih', mouthOpen * 0.08);
+  expression('ou', mouthOpen * (phase === 2 ? 0.24 : 0.02));
 }
 
 renderer.setAnimationLoop(() => {
