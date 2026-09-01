@@ -16,6 +16,7 @@ voiceToggle.setAttribute('aria-pressed',String(voiceEnabled));
 function setEmotion(emotion='neutral'){
   [...avatar.classList].filter(x=>x.startsWith('emotion-')).forEach(x=>avatar.classList.remove(x));
   avatar.classList.add(`emotion-${emotion}`);
+  window.aniAvatar?.setEmotion(emotion);
 }
 function bubble(text,who){const el=document.createElement('div');el.className=`bubble ${who}`;el.textContent=text;history.appendChild(el);history.scrollTop=history.scrollHeight}
 function showSpeech(text){speech.textContent=text.replace(/^\([^)]+\)\s*/,'');speech.hidden=false;clearTimeout(showSpeech.timer);showSpeech.timer=setTimeout(()=>speech.hidden=true,9000)}
@@ -27,7 +28,7 @@ let mouthFrame=null;
 function stopLipSync(){
   if(mouthFrame)cancelAnimationFrame(mouthFrame);
   mouthFrame=null;
-  avatar.style.setProperty('--mouth-open','.12');
+  window.aniAvatar?.setMouthOpen(0);
   avatar.classList.remove('speaking');
 }
 
@@ -50,7 +51,7 @@ function startLipSync(){
     let energy=0;
     for(const sample of waveform)energy+=Math.abs(sample-128);
     const openness=Math.max(.16,Math.min(1.25,energy/waveform.length/10));
-    avatar.style.setProperty('--mouth-open',openness.toFixed(2));
+    window.aniAvatar?.setMouthOpen(openness);
     mouthFrame=requestAnimationFrame(animate);
   };
   animate();

@@ -1,5 +1,5 @@
-const CACHE='ani-companion-v2';
-const ASSETS=['/','/style.css','/app.js','/manifest.webmanifest','/icons/ani-192.png','/icons/ani-512.png'];
+const CACHE='ani-companion-v3';
+const ASSETS=['/','/style.css','/app.js','/avatar-3d.bundle.js','/manifest.webmanifest','/icons/ani-192.png','/icons/ani-512.png'];
 self.addEventListener('install',event=>event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(ASSETS))));
 self.addEventListener('activate',event=>event.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(key=>key!==CACHE).map(key=>caches.delete(key))))));
 self.addEventListener('fetch',event=>{

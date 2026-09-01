@@ -87,14 +87,29 @@ class AniCompanionTests(unittest.TestCase):
         css = (ROOT / 'static' / 'style.css').read_text()
         self.assertIn('[hidden]{display:none!important}', css)
 
+    def test_interface_uses_local_vrm_avatar(self):
+        html = (ROOT / 'static' / 'index.html').read_text()
+        script = (ROOT / 'static' / 'app.js').read_text()
+        gitignore = (ROOT / '.gitignore').read_text()
+        self.assertIn('id="avatar-canvas"', html)
+        self.assertIn('/avatar-3d.bundle.js', html)
+        self.assertNotIn('<svg viewBox="0 0 560 860"', html)
+        self.assertIn('window.aniAvatar?.setEmotion', script)
+        self.assertIn('window.aniAvatar?.setMouthOpen', script)
+        self.assertIn('static/models/*.vrm', gitignore)
+        self.assertTrue((ROOT / 'static' / 'models' / 'ani.vrm').is_file())
+
     def test_mouth_animation_follows_audio_amplitude(self):
         script = (ROOT / 'static' / 'app.js').read_text()
         css = (ROOT / 'static' / 'style.css').read_text()
         self.assertIn('createMediaElementSource', script)
         self.assertIn('getByteTimeDomainData', script)
-        self.assertIn("--mouth-open", script)
-        self.assertIn('scaleY(var(--mouth-open))', css)
+        self.assertIn('window.aniAvatar?.setMouthOpen', script)
         self.assertNotIn('animation:talk', css)
+
+    def test_service_worker_precaches_avatar_runtime(self):
+        worker = (ROOT / 'static' / 'sw.js').read_text()
+        self.assertIn("'/avatar-3d.bundle.js'", worker)
 
     def test_manifest_is_installable_pwa(self):
         manifest = json.loads((ROOT / 'static' / 'manifest.webmanifest').read_text())
