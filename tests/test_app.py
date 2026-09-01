@@ -167,11 +167,11 @@ class AniCompanionTests(unittest.TestCase):
         self.assertIn('armPreferredMicrophone', script)
         self.assertIn("document.addEventListener('pointerdown',resumePreferredMicrophone", script)
 
-    def test_avatar_uses_dark_lighting_and_blue_irises(self):
+    def test_avatar_uses_dark_lighting_and_emerald_irises(self):
         source = (ROOT / 'src' / 'avatar-3d.js').read_text()
         self.assertIn('renderer.toneMappingExposure = 0.82', source)
         self.assertIn("material.name.includes('EyeIris')", source)
-        self.assertIn('0x4f8fc4', source)
+        self.assertIn('0x10b981', source)
         self.assertIn('material.emissive.multiplyScalar(0.18)', source)
         self.assertIn('material.color.multiplyScalar(0.72)', source)
 
@@ -181,15 +181,21 @@ class AniCompanionTests(unittest.TestCase):
         self.assertIn("expression('ih', mouthOpen * 0.08)", source)
         self.assertIn("happy: ['happy', 0.45]", source)
 
-    def test_assistant_reply_uses_single_line_ticker_not_history_bubble(self):
+    def test_assistant_reply_uses_ticker_and_expandable_imessage_bubble(self):
         script = (ROOT / 'static' / 'app.js').read_text()
         css = (ROOT / 'static' / 'style.css').read_text()
-        self.assertNotIn("bubble(data.reply,'ani')", script)
+        self.assertIn("bubble(data.reply,'ani',{collapsible:true})", script)
+        self.assertIn("el.setAttribute('aria-expanded','false')", script)
+        self.assertIn("el.classList.toggle('expanded')", script)
         self.assertIn("ticker.className='speech-line'", script)
         self.assertIn('speech.replaceChildren(ticker)', script)
         self.assertIn('ticker.scrollWidth<=speech.clientWidth', script)
         self.assertIn("fill:'forwards'", script)
         self.assertIn('white-space:nowrap', css)
+        self.assertIn('-webkit-line-clamp:3', css)
+        self.assertIn('.bubble.ani.collapsible.expanded', css)
+        self.assertIn('background:#0a84ff', css)
+        self.assertIn('.history:not(:empty){height:18vh}', css)
 
     def test_ticker_starts_with_audio_playback_and_uses_wav_duration(self):
         script = (ROOT / 'static' / 'app.js').read_text()
@@ -211,7 +217,7 @@ class AniCompanionTests(unittest.TestCase):
 
     def test_service_worker_precaches_avatar_runtime(self):
         worker = (ROOT / 'static' / 'sw.js').read_text()
-        self.assertIn("const CACHE='ani-companion-v8'", worker)
+        self.assertIn("const CACHE='ani-companion-v9'", worker)
         self.assertIn("'/avatar-3d.bundle.js'", worker)
 
     def test_manifest_is_installable_pwa(self):

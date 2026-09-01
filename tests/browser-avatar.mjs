@@ -67,7 +67,7 @@ await page.screenshot({ path: 'test-artifacts/avatar-3d-idle.png', fullPage: tru
 await page.evaluate(() => { window.aniAvatar.setEmotion('happy'); window.aniAvatar.setMouthOpen(1.1); });
 await page.waitForTimeout(250);
 await page.screenshot({ path: 'test-artifacts/avatar-3d-speaking.png', fullPage: true });
-await page.route('**/api/chat', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ reply: 'Voici une réponse volontairement longue qui doit défiler sur une seule ligne sans jamais masquer le visage d’Ani.', emotion: 'happy', session_id: 'browser-test' }) }));
+await page.route('**/api/chat', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ reply: 'Voici une réponse volontairement longue qui doit apparaître dans une bulle de conversation. Elle contient assez de texte pour occuper plus de trois lignes sur un écran mobile, être tronquée proprement, puis se déplier entièrement lorsque François la touche.', emotion: 'happy', session_id: 'browser-test' }) }));
 let resolveTtsRequested;
 const ttsRequested = new Promise(resolve => { resolveTtsRequested = resolve; });
 await page.route('**/api/tts', async route => {
@@ -89,13 +89,25 @@ const mobileInputAudio = await page.evaluate(() => ({
   tickerWhiteSpace: getComputedStyle(document.querySelector('.speech-line')).whiteSpace,
   tickerHeight: document.getElementById('speech').getBoundingClientRect().height,
   tickerDuration: document.querySelector('.speech-line').getAnimations()[0]?.effect.getTiming().duration,
+  assistantCollapsed: document.querySelector('.bubble.ani.collapsible')?.getAttribute('aria-expanded')==='false',
+  assistantLineClamp: getComputedStyle(document.querySelector('.bubble.ani.collapsible')).webkitLineClamp,
+  assistantClipped: document.querySelector('.bubble.ani.collapsible').scrollHeight>document.querySelector('.bubble.ani.collapsible').clientHeight,
+  assistantCollapsedHeight: document.querySelector('.bubble.ani.collapsible').clientHeight,
 }));
 mobileInputAudio.tickerHiddenBeforeAudio = tickerHiddenBeforeAudio;
+await page.screenshot({ path: 'test-artifacts/avatar-3d-bubbles-collapsed.png', fullPage: true });
+await page.locator('.bubble.ani.collapsible').click();
+await page.waitForTimeout(350);
+const expandedBubble = await page.evaluate(() => ({
+  expanded: document.querySelector('.bubble.ani.collapsible').getAttribute('aria-expanded')==='true',
+  height: document.querySelector('.bubble.ani.collapsible').clientHeight,
+}));
+expandedBubble.renderedPngBytes=(await page.locator('#avatar-canvas').screenshot()).length;
 await page.screenshot({ path: 'test-artifacts/avatar-3d-ticker.png', fullPage: true });
-console.log(JSON.stringify({ mobileProfile, state, orbit, mobileInputAudio, resources, errors }, null, 2));
+console.log(JSON.stringify({ mobileProfile, state, orbit, mobileInputAudio, expandedBubble, resources, errors }, null, 2));
 if (!state.ready || !state.loadingHidden || state.renderedPngBytes < 10000) process.exitCode = 2;
 if (orbit.moved < 0.01 || orbit.returned > 0.02) process.exitCode = 6;
-if (!mobileInputAudio.keyboardDismissed || !mobileInputAudio.audioPlaying || mobileInputAudio.audioTime <= 0.05 || !mobileInputAudio.microphoneContinuous || mobileInputAudio.assistantHistoryBubbles !== 0 || mobileInputAudio.tickerWhiteSpace !== 'nowrap' || mobileInputAudio.tickerHeight > 31 || !mobileInputAudio.tickerHiddenBeforeAudio || Math.abs(mobileInputAudio.tickerDuration - 1000) > 100) process.exitCode = 5;
+if (!mobileInputAudio.keyboardDismissed || !mobileInputAudio.audioPlaying || mobileInputAudio.audioTime <= 0.05 || !mobileInputAudio.microphoneContinuous || mobileInputAudio.assistantHistoryBubbles !== 1 || mobileInputAudio.tickerWhiteSpace !== 'nowrap' || mobileInputAudio.tickerHeight > 31 || !mobileInputAudio.tickerHiddenBeforeAudio || Math.abs(mobileInputAudio.tickerDuration - 1000) > 100 || !mobileInputAudio.assistantCollapsed || mobileInputAudio.assistantLineClamp !== '3' || !mobileInputAudio.assistantClipped || !expandedBubble.expanded || expandedBubble.height <= mobileInputAudio.assistantCollapsedHeight || expandedBubble.renderedPngBytes < 10000) process.exitCode = 5;
 if (resources.some((resource) => resource.status !== 200) || resources.length < 2) process.exitCode = 3;
 if (errors.length) process.exitCode = 4;
 await page.locator('#mic-button').click();

@@ -18,7 +18,16 @@ function setEmotion(emotion='neutral'){
   avatar.classList.add(`emotion-${emotion}`);
   window.aniAvatar?.setEmotion(emotion);
 }
-function bubble(text,who){const el=document.createElement('div');el.className=`bubble ${who}`;el.textContent=text;history.appendChild(el);history.scrollTop=history.scrollHeight}
+function bubble(text,who,{collapsible=false}={}){
+  const el=document.createElement('div');el.className=`bubble ${who}`;el.textContent=text;
+  if(collapsible){
+    el.classList.add('collapsible');el.tabIndex=0;el.setAttribute('role','button');el.setAttribute('aria-expanded','false');
+    const toggle=()=>{const expanded=el.classList.toggle('expanded');el.setAttribute('aria-expanded',String(expanded));history.scrollTop=history.scrollHeight};
+    el.addEventListener('click',toggle);
+    el.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();toggle()}});
+  }
+  history.appendChild(el);history.scrollTop=history.scrollHeight;return el;
+}
 let speechAnimation=null;
 function hideSpeech(){speechAnimation?.cancel();speechAnimation=null;speech.hidden=true}
 function showSpeech(text,durationSeconds=0){
@@ -119,6 +128,7 @@ form.addEventListener('submit',async event=>{
     const data=await response.json();if(!response.ok)throw new Error(data.detail||'Ani ne répond pas');
     if(data.session_id)localStorage.setItem('ani.session',data.session_id);
     thinking.hidden=true;setEmotion(data.emotion);
+    bubble(data.reply,'ani',{collapsible:true});
     if(voiceEnabled)await speak(data.reply,data.emotion);else showSpeech(data.reply);
   }catch(error){thinking.hidden=true;setEmotion('sad');bubble(error.message,'ani')}
 });
