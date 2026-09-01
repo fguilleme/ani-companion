@@ -160,6 +160,7 @@ def build_qwen_tts_request(text: str, instructions: str = '') -> urllib.request.
         'input': text,
         'response_format': 'wav',
         'force_chunking': True,
+        'one_sentence_per_chunk': True,
         'temperature': 0.15,
         'top_p': 0.8,
     }
@@ -184,7 +185,7 @@ def _fetch_qwen_audio(text: str, instructions: str = '') -> bytes:
 def prepare_spoken_text(text: str) -> str:
     spoken = re.sub(r'^\([^)]+\)\s*', '', text.strip())
     spoken = re.sub(r'\[[^\]]+\]', ' ', spoken)
-    spoken = re.sub(r'(?:\.{2,}|…)', ', ', spoken)
+    spoken = re.sub(r'(?:\.{2,}|…)', '. ', spoken)
     spoken = re.sub(r'([.!?])\s*\1+', r'\1', spoken)
     spoken = ''.join(char for char in spoken if unicodedata.category(char) != 'So')
     spoken = re.sub(r'\s+([,.!?])', r'\1', spoken)

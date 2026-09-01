@@ -79,7 +79,7 @@ class AniCompanionTests(unittest.TestCase):
         spoken = app_module.prepare_spoken_text(
             'Oh… attends... je termine cette phrase. 💙'
         )
-        self.assertEqual(spoken, 'Oh, attends, je termine cette phrase.')
+        self.assertEqual(spoken, 'Oh. attends. je termine cette phrase.')
 
     def test_qwen_tts_request_uses_local_server_and_french_voice(self):
         request = build_qwen_tts_request('Bonjour François.', 'Parle avec joie.')
@@ -91,6 +91,7 @@ class AniCompanionTests(unittest.TestCase):
         self.assertEqual(payload['instructions'], 'Parle avec joie.')
         self.assertEqual(payload['response_format'], 'wav')
         self.assertIs(payload['force_chunking'], True)
+        self.assertIs(payload['one_sentence_per_chunk'], True)
 
     def test_chat_rejects_empty_message(self):
         client = TestClient(app)
