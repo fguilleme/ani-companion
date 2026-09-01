@@ -1,6 +1,7 @@
 import json
 import unittest
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -147,12 +148,34 @@ class AniCompanionTests(unittest.TestCase):
     def test_microphone_permission_and_errors_are_handled(self):
         script = (ROOT / 'static' / 'app.js').read_text()
         self.assertIn('navigator.mediaDevices.getUserMedia', script)
-        self.assertIn('recognition.onerror', script)
+        self.assertIn('new MediaRecorder', script)
+        self.assertIn("fetch('/api/stt'", script)
+        self.assertNotIn('SpeechRecognition', script)
         self.assertIn('Microphone refusé', script)
+
+    def test_microphone_is_continuous_hands_free_with_local_vad(self):
+        script = (ROOT / 'static' / 'app.js').read_text()
+        self.assertIn('microphoneMode', script)
+        self.assertIn('monitorVoiceActivity', script)
+        self.assertIn('echoCancellation:true', script)
+        self.assertIn('noiseSuppression:true', script)
+        self.assertIn('stopMicrophoneMode', script)
+
+    def test_local_stt_endpoint_returns_whisper_transcript(self):
+        client = TestClient(app)
+        with patch.object(app_module, 'transcribe_local_audio', new=AsyncMock(return_value='Bonjour Ani.')):
+            response = client.post('/api/stt', content=b'fake audio', headers={'content-type': 'audio/mp4'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {'text': 'Bonjour Ani.'})
+
+    def test_local_stt_endpoint_rejects_empty_audio(self):
+        client = TestClient(app)
+        response = client.post('/api/stt', content=b'', headers={'content-type': 'audio/mp4'})
+        self.assertEqual(response.status_code, 422)
 
     def test_service_worker_precaches_avatar_runtime(self):
         worker = (ROOT / 'static' / 'sw.js').read_text()
-        self.assertIn("const CACHE='ani-companion-v5'", worker)
+        self.assertIn("const CACHE='ani-companion-v6'", worker)
         self.assertIn("'/avatar-3d.bundle.js'", worker)
 
     def test_manifest_is_installable_pwa(self):

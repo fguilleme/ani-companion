@@ -109,33 +109,111 @@ form.addEventListener('submit',async event=>{
 });
 voiceToggle.addEventListener('click',()=>{voiceEnabled=!voiceEnabled;localStorage.setItem('ani.voice',voiceEnabled?'on':'off');voiceToggle.classList.toggle('active',voiceEnabled);voiceToggle.setAttribute('aria-pressed',String(voiceEnabled));if(!voiceEnabled)player.pause()});
 
-const Recognition=window.SpeechRecognition||window.webkitSpeechRecognition;
 const microphoneErrorMessage=error=>{
   const code=error?.error||error?.name;
-  if(code==='not-allowed'||code==='service-not-allowed'||code==='NotAllowedError')return 'Microphone refusé : autorise-le dans les réglages du navigateur.';
-  if(code==='audio-capture'||code==='NotFoundError')return 'Aucun microphone utilisable n’a été trouvé.';
+  if(code==='not-allowed'||code==='NotAllowedError')return 'Microphone refusé : autorise-le dans les réglages du navigateur.';
+  if(code==='NotFoundError')return 'Aucun microphone utilisable n’a été trouvé.';
   if(code==='NotReadableError')return 'Le microphone est déjà utilisé par une autre application.';
-  if(code==='no-speech')return 'Je n’ai rien entendu. Réessaie en parlant plus près du micro.';
-  return 'La dictée vocale est momentanément indisponible.';
+  return error?.message||'La dictée vocale locale est momentanément indisponible.';
 };
-async function requestMicrophonePermission(){
-  if(!window.isSecureContext||!navigator.mediaDevices?.getUserMedia)throw new Error('Microphone refusé : ouvre Ani avec une adresse HTTPS sécurisée.');
-  const stream=await navigator.mediaDevices.getUserMedia({audio:true});
-  stream.getTracks().forEach(track=>track.stop());
+let microphoneMode=false;
+let micStream=null;
+let micContext=null;
+let micAnalyser=null;
+let micWaveform=null;
+let micFrame=null;
+let utteranceRecorder=null;
+let utteranceChunks=[];
+let speechStarted=0;
+let silenceStarted=0;
+let transcribing=false;
+let discardRecording=false;
+
+function recorderMimeType(){
+  for(const type of ['audio/mp4','audio/webm;codecs=opus','audio/webm','audio/ogg;codecs=opus']){
+    if(MediaRecorder.isTypeSupported(type))return type;
+  }
+  return '';
 }
-if(Recognition){
-  const recognition=new Recognition();
-  recognition.lang='fr-FR';
-  recognition.interimResults=false;
-  recognition.onstart=()=>micButton.classList.add('listening');
-  recognition.onend=()=>micButton.classList.remove('listening');
-  recognition.onerror=event=>{micButton.classList.remove('listening');bubble(microphoneErrorMessage(event),'ani')};
-  recognition.onresult=event=>{input.value=event.results[0][0].transcript;form.requestSubmit()};
-  micButton.addEventListener('click',async()=>{
-    try{await requestMicrophonePermission();recognition.start()}
-    catch(error){bubble(microphoneErrorMessage(error),'ani')}
-  });
-}else{micButton.addEventListener('click',()=>{input.placeholder='Dictée non disponible dans ce navigateur';input.focus()})}
+
+async function transcribeUtterance(blob){
+  transcribing=true;micButton.classList.add('transcribing');
+  try{
+    const response=await fetch('/api/stt',{method:'POST',headers:{'content-type':blob.type||'application/octet-stream'},body:blob});
+    const data=await response.json();
+    if(!response.ok){if(response.status!==422)throw new Error(data.detail||'Transcription indisponible');return}
+    if(data.text?.trim()){input.value=data.text.trim();form.requestSubmit()}
+  }catch(error){bubble(microphoneErrorMessage(error),'ani')}
+  finally{transcribing=false;micButton.classList.remove('transcribing')}
+}
+
+function startUtterance(){
+  if(!microphoneMode||transcribing||utteranceRecorder)return;
+  utteranceChunks=[];discardRecording=false;
+  const mimeType=recorderMimeType();
+  utteranceRecorder=new MediaRecorder(micStream,mimeType?{mimeType}:undefined);
+  utteranceRecorder.ondataavailable=event=>{if(event.data.size)utteranceChunks.push(event.data)};
+  utteranceRecorder.onstop=()=>{
+    const type=utteranceRecorder?.mimeType||mimeType||'application/octet-stream';
+    const blob=new Blob(utteranceChunks,{type});
+    utteranceRecorder=null;utteranceChunks=[];
+    if(!discardRecording&&blob.size>0)transcribeUtterance(blob);
+  };
+  speechStarted=performance.now();silenceStarted=0;
+  utteranceRecorder.start(200);
+}
+
+function monitorVoiceActivity(){
+  if(!microphoneMode)return;
+  micAnalyser.getByteTimeDomainData(micWaveform);
+  let energy=0;
+  for(const sample of micWaveform){const value=(sample-128)/128;energy+=value*value}
+  const rms=Math.sqrt(energy/micWaveform.length);
+  const now=performance.now();
+  if(rms>0.028){
+    silenceStarted=0;
+    if(!utteranceRecorder&&!transcribing)startUtterance();
+  }else if(utteranceRecorder?.state==='recording'&&now-speechStarted>400){
+    if(!silenceStarted)silenceStarted=now;
+    if(now-silenceStarted>850)utteranceRecorder.stop();
+  }
+  if(utteranceRecorder?.state==='recording'&&now-speechStarted>20000)utteranceRecorder.stop();
+  micFrame=requestAnimationFrame(monitorVoiceActivity);
+}
+
+async function startMicrophoneMode(){
+  if(!window.isSecureContext||!navigator.mediaDevices?.getUserMedia)throw new Error('Microphone refusé : ouvre Ani avec une adresse HTTPS sécurisée.');
+  if(!window.MediaRecorder)throw new Error('Enregistrement audio indisponible dans ce navigateur.');
+  unlockAudio();
+  micStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
+  const AudioContext=window.AudioContext||window.webkitAudioContext;
+  micContext=new AudioContext();
+  await micContext.resume();
+  const source=micContext.createMediaStreamSource(micStream);
+  micAnalyser=micContext.createAnalyser();micAnalyser.fftSize=512;
+  micWaveform=new Uint8Array(micAnalyser.fftSize);source.connect(micAnalyser);
+  microphoneMode=true;
+  micButton.classList.add('listening');micButton.setAttribute('aria-pressed','true');
+  micButton.setAttribute('aria-label','Arrêter l’écoute continue');
+  monitorVoiceActivity();
+}
+
+function stopMicrophoneMode(){
+  microphoneMode=false;discardRecording=true;
+  if(micFrame)cancelAnimationFrame(micFrame);micFrame=null;
+  if(utteranceRecorder?.state==='recording')utteranceRecorder.stop();
+  micStream?.getTracks().forEach(track=>track.stop());micStream=null;
+  micContext?.close();micContext=null;
+  micButton.classList.remove('listening','transcribing');micButton.setAttribute('aria-pressed','false');
+  micButton.setAttribute('aria-label','Activer l’écoute continue');
+}
+
+micButton.setAttribute('aria-pressed','false');
+micButton.addEventListener('click',async()=>{
+  if(microphoneMode){stopMicrophoneMode();return}
+  try{await startMicrophoneMode()}
+  catch(error){stopMicrophoneMode();bubble(microphoneErrorMessage(error),'ani')}
+});
 
 window.addEventListener('beforeinstallprompt',event=>{event.preventDefault();deferredInstall=event;installButton.hidden=false});
 installButton.addEventListener('click',async()=>{if(!deferredInstall)return;deferredInstall.prompt();await deferredInstall.userChoice;deferredInstall=null;installButton.hidden=true});

@@ -13,8 +13,9 @@ function toneWav(seconds = 1) {
   return buffer;
 }
 
-const browser = await chromium.launch({ headless: true, args: ['--enable-webgl', '--use-angle=swiftshader', '--autoplay-policy=user-gesture-required'] });
+const browser = await chromium.launch({ headless: true, args: ['--enable-webgl', '--use-angle=swiftshader', '--autoplay-policy=user-gesture-required', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'] });
 const context = await browser.newContext({ viewport: { width: 430, height: 932 } });
+await context.grantPermissions(['microphone'], { origin: 'http://127.0.0.1:8787' });
 const page = await context.newPage();
 const errors = [];
 const resources = [];
@@ -56,6 +57,8 @@ await page.waitForTimeout(250);
 await page.screenshot({ path: 'test-artifacts/avatar-3d-speaking.png', fullPage: true });
 await page.route('**/api/chat', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ reply: 'Test audio mobile.', emotion: 'happy', session_id: 'browser-test' }) }));
 await page.route('**/api/tts', route => route.fulfill({ status: 200, contentType: 'audio/wav', body: toneWav() }));
+await page.locator('#mic-button').click();
+await page.waitForFunction(() => document.getElementById('mic-button').classList.contains('listening'));
 await page.locator('#message-input').fill('Ferme le clavier');
 await page.locator('button.send').click();
 await page.waitForFunction(() => document.getElementById('voice-player').currentTime > 0.05, null, { timeout: 10000 });
@@ -63,11 +66,13 @@ const mobileInputAudio = await page.evaluate(() => ({
   keyboardDismissed: document.activeElement !== document.getElementById('message-input'),
   audioPlaying: !document.getElementById('voice-player').paused,
   audioTime: document.getElementById('voice-player').currentTime,
+  microphoneContinuous: document.getElementById('mic-button').classList.contains('listening'),
 }));
 console.log(JSON.stringify({ state, orbit, mobileInputAudio, resources, errors }, null, 2));
 if (!state.ready || !state.loadingHidden || state.renderedPngBytes < 10000) process.exitCode = 2;
 if (orbit.moved < 0.01 || orbit.returned > 0.02) process.exitCode = 6;
-if (!mobileInputAudio.keyboardDismissed || !mobileInputAudio.audioPlaying || mobileInputAudio.audioTime <= 0.05) process.exitCode = 5;
+if (!mobileInputAudio.keyboardDismissed || !mobileInputAudio.audioPlaying || mobileInputAudio.audioTime <= 0.05 || !mobileInputAudio.microphoneContinuous) process.exitCode = 5;
 if (resources.some((resource) => resource.status !== 200) || resources.length < 2) process.exitCode = 3;
 if (errors.length) process.exitCode = 4;
+await page.locator('#mic-button').click();
 await browser.close();

@@ -1,4 +1,5 @@
 import asyncio
+import httpx
 import json
 import os
 from pathlib import Path
@@ -7,7 +8,7 @@ import tempfile
 import unicodedata
 import urllib.request
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.background import BackgroundTasks
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -19,6 +20,7 @@ STATIC = ROOT / 'static'
 HERMES_BIN = os.getenv('HERMES_BIN', '/home/francois/.hermes/hermes-agent/venv/bin/hermes')
 QWEN_TTS_URL = os.getenv('ANI_QWEN_TTS_URL', 'http://127.0.0.1:15004/v1/audio/speech')
 QWEN_TTS_VOICE = os.getenv('ANI_QWEN_TTS_VOICE', 'Serena')
+WHISPER_ASR_URL = os.getenv('ANI_WHISPER_ASR_URL', 'http://127.0.0.1:9002/asr')
 ANSI_RE = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]')
 SESSION_RE = re.compile(r'^[A-Za-z0-9_.:-]{1,160}$')
 RUN_SEMAPHORE = asyncio.Semaphore(2)
@@ -194,6 +196,35 @@ def extract_tts_instructions(text: str) -> str:
     if not directions:
         return ''
     return 'Interprète naturellement les indications suivantes sans les prononcer : ' + ' ; '.join(directions) + '.'
+
+
+async def transcribe_local_audio(audio: bytes, content_type: str) -> str:
+    extension = {'audio/mp4': 'm4a', 'audio/webm': 'webm', 'audio/ogg': 'ogg', 'audio/wav': 'wav'}.get(content_type, 'audio')
+    async with httpx.AsyncClient(timeout=180) as client:
+        response = await client.post(
+            WHISPER_ASR_URL,
+            params={'task': 'transcribe', 'language': 'fr', 'vad_filter': 'true', 'output': 'txt'},
+            files={'audio_file': (f'ani.{extension}', audio, content_type)},
+        )
+        response.raise_for_status()
+    return response.text.strip()
+
+
+@app.post('/api/stt')
+async def stt(request: Request):
+    audio = await request.body()
+    if not audio:
+        raise HTTPException(status_code=422, detail='Enregistrement audio vide.')
+    if len(audio) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail='Enregistrement audio trop volumineux.')
+    content_type = request.headers.get('content-type', 'application/octet-stream').split(';', 1)[0]
+    try:
+        text = await transcribe_local_audio(audio, content_type)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail='La transcription locale est indisponible.') from exc
+    if not text:
+        raise HTTPException(status_code=422, detail="Je n'ai rien entendu.")
+    return {'text': text}
 
 
 @app.post('/api/tts')
