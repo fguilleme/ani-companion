@@ -48,6 +48,12 @@ class AniCompanionTests(unittest.TestCase):
         self.assertEqual(classify_emotion("C'est adorable ! J'adore."), 'happy')
         self.assertEqual(classify_emotion("Je suis désolée, c'est triste."), 'sad')
 
+    def test_classify_emotion_understands_persona_sound_cues(self):
+        self.assertEqual(classify_emotion('[sourit] Okay, je te suis.'), 'happy')
+        self.assertEqual(classify_emotion('[rougit] Tu es mignon.'), 'shy')
+        self.assertEqual(classify_emotion('[penche la tête] Comment ça ?'), 'curious')
+        self.assertEqual(classify_emotion('[soupir] Ça me rend triste.'), 'sad')
+
     def test_build_hermes_command_resumes_known_session(self):
         command = build_hermes_command('session-123')
         self.assertIn('--resume', command)
@@ -90,13 +96,40 @@ class AniCompanionTests(unittest.TestCase):
         self.assertEqual(payload['input'], 'Bonjour François.')
         self.assertEqual(payload['instructions'], 'Parle avec joie.')
         self.assertEqual(payload['response_format'], 'wav')
-        self.assertIs(payload['force_chunking'], True)
-        self.assertIs(payload['one_sentence_per_chunk'], True)
+        self.assertNotIn('force_chunking', payload)
+        self.assertNotIn('one_sentence_per_chunk', payload)
+
+    def test_tts_plan_splits_reply_without_generating_audio(self):
+        response = TestClient(app).post('/api/tts/plan', json={
+            'text': '(Français) Oh. Première phrase assez longue pour être autonome. Deuxième phrase suffisamment longue.',
+            'emotion': 'happy',
+            'turn_id': 7,
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['chunks'], [
+            'Oh. Première phrase assez longue pour être autonome.',
+            'Deuxième phrase suffisamment longue.',
+        ])
+
+    def test_pwa_prefetches_only_the_next_audio_chunk_during_playback(self):
+        script = (ROOT / 'static' / 'app.js').read_text()
+        self.assertIn("fetch('/api/tts/plan'", script)
+        self.assertIn('pendingAudio=fetchAudioChunk(chunks[0]', script)
+        self.assertIn('pendingAudio=fetchAudioChunk(chunks[index+1]', script)
+        self.assertLess(
+            script.index('pendingAudio=fetchAudioChunk(chunks[index+1]'),
+            script.index('await player.play()', script.index('pendingAudio=fetchAudioChunk(chunks[index+1]')),
+        )
 
     def test_chat_rejects_empty_message(self):
         client = TestClient(app)
         response = client.post('/api/chat', json={'message': ''})
         self.assertEqual(response.status_code, 422)
+
+    def test_chat_timeout_allows_slow_local_model_to_finish(self):
+        self.assertGreaterEqual(app_module.CHAT_TIMEOUT_SECONDS, 300)
+        source = (ROOT / 'app.py').read_text()
+        self.assertIn('timeout=CHAT_TIMEOUT_SECONDS', source)
 
     def test_hidden_state_cannot_be_overridden_by_component_display(self):
         css = (ROOT / 'static' / 'style.css').read_text()
@@ -153,6 +186,12 @@ class AniCompanionTests(unittest.TestCase):
         self.assertIn("fetch('/api/stt'", script)
         self.assertNotIn('SpeechRecognition', script)
         self.assertIn('Microphone refusé', script)
+
+    def test_microphone_vad_ignores_ani_speaker_output(self):
+        script = (ROOT / 'static' / 'app.js').read_text()
+        guard = "if(!player.paused&&!player.ended)"
+        self.assertIn(guard, script)
+        self.assertLess(script.index(guard), script.index("if(rms>0.028)"))
 
     def test_microphone_is_continuous_hands_free_with_local_vad(self):
         script = (ROOT / 'static' / 'app.js').read_text()
@@ -224,7 +263,33 @@ class AniCompanionTests(unittest.TestCase):
         source = (ROOT / 'src' / 'avatar-3d.js').read_text()
         self.assertIn('MAX_MOUTH_OPEN = 0.40', source)
         self.assertIn("expression('ih', mouthOpen * 0.08)", source)
-        self.assertIn("happy: ['happy', 0.45]", source)
+        self.assertIn("happy: ['happy', 0.72]", source)
+
+    def test_avatar_moves_head_subtly_while_speaking(self):
+        source = (ROOT / 'src' / 'avatar-3d.js').read_text()
+        self.assertIn('function applySpeakingMotion', source)
+        self.assertIn('mouthOpen > 0.025', source)
+        self.assertIn('head.node.rotation.y', source)
+        self.assertIn('head.node.rotation.x', source)
+
+    def test_avatar_exposes_dance_spin_jump_and_sway_motions(self):
+        source = (ROOT / 'src' / 'avatar-3d.js').read_text()
+        self.assertIn('function playMotion', source)
+        for motion in ("'dance'", "'spin'", "'jump'", "'sway'", "'tease'"):
+            self.assertIn(motion, source)
+        self.assertIn('window.aniAvatar = { setEmotion, setMouthOpen, playMotion', source)
+
+    def test_large_avatar_motions_use_knee_to_head_camera_framing(self):
+        source = (ROOT / 'src' / 'avatar-3d.js').read_text()
+        self.assertIn("['dance', 'spin', 'jump'].includes(name)", source)
+        self.assertIn("getNormalizedBoneNode('leftLowerLeg')", source)
+        self.assertIn('camera.position.lerp(actionCameraPosition', source)
+        self.assertIn('controls.target.lerp(actionCameraTarget', source)
+
+    def test_reply_cues_can_trigger_avatar_motions(self):
+        script = (ROOT / 'static' / 'app.js').read_text()
+        self.assertIn('function motionForText', script)
+        self.assertIn("window.aniAvatar?.playMotion(replyMotion)", script)
 
     def test_assistant_reply_uses_ticker_and_expandable_imessage_bubble(self):
         script = (ROOT / 'static' / 'app.js').read_text()
@@ -247,7 +312,7 @@ class AniCompanionTests(unittest.TestCase):
         script = (ROOT / 'static' / 'app.js').read_text()
         self.assertNotIn('setEmotion(data.emotion);showSpeech(data.reply)', script)
         self.assertIn('await player.play();', script)
-        self.assertIn('if(turnId!==activeTurnId){player.pause();return}\n  showSpeech(text,player.duration);', script)
+        self.assertIn('if(turnId!==activeTurnId){player.pause();return}\n    showSpeech(chunks[index],player.duration);', script)
         self.assertIn('durationSeconds*1000', script)
 
     def test_local_stt_endpoint_returns_whisper_transcript(self):
@@ -264,14 +329,22 @@ class AniCompanionTests(unittest.TestCase):
 
     def test_service_worker_precaches_avatar_runtime(self):
         worker = (ROOT / 'static' / 'sw.js').read_text()
-        self.assertIn("const CACHE='ani-companion-v10'", worker)
+        self.assertIn("const CACHE='ani-companion-v15'", worker)
         self.assertIn("'/avatar-3d.bundle.js'", worker)
+
+    def test_service_worker_activates_pipeline_update_immediately(self):
+        worker = (ROOT / 'static' / 'sw.js').read_text()
+        self.assertIn('self.skipWaiting()', worker)
+        self.assertIn('self.clients.claim()', worker)
 
     def test_manifest_is_installable_pwa(self):
         manifest = json.loads((ROOT / 'static' / 'manifest.webmanifest').read_text())
         self.assertEqual(manifest['display'], 'standalone')
         self.assertEqual(manifest['name'], 'Ani Companion')
         self.assertTrue(any(icon['sizes'] == '512x512' for icon in manifest['icons']))
+        html = (ROOT / 'static' / 'index.html').read_text()
+        self.assertIn('rel="apple-touch-icon" href="/icons/ani-192.png"', html)
+        self.assertIn('rel="icon" href="/icons/ani-192.png"', html)
 
     def test_interface_has_avatar_chat_voice_and_install_controls(self):
         html = (ROOT / 'static' / 'index.html').read_text()

@@ -21,6 +21,7 @@ HERMES_BIN = os.getenv('HERMES_BIN', '/home/francois/.hermes/hermes-agent/venv/b
 QWEN_TTS_URL = os.getenv('ANI_QWEN_TTS_URL', 'http://127.0.0.1:15004/v1/audio/speech')
 QWEN_TTS_VOICE = os.getenv('ANI_QWEN_TTS_VOICE', 'Serena')
 WHISPER_ASR_URL = os.getenv('ANI_WHISPER_ASR_URL', 'http://127.0.0.1:9002/asr')
+CHAT_TIMEOUT_SECONDS = int(os.getenv('ANI_CHAT_TIMEOUT_SECONDS', '300'))
 ANSI_RE = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]')
 SESSION_RE = re.compile(r'^[A-Za-z0-9_.:-]{1,160}$')
 RUN_SEMAPHORE = asyncio.Semaphore(2)
@@ -44,6 +45,7 @@ class TTSRequest(BaseModel):
     text: str = Field(min_length=1, max_length=5000)
     emotion: str = Field(default='neutral', max_length=24)
     turn_id: int = Field(default=0, ge=0)
+    instructions: str = Field(default='', max_length=1000)
 
 
 @app.middleware('http')
@@ -79,16 +81,16 @@ def parse_hermes_output(raw: str) -> tuple[str, str | None]:
 
 def classify_emotion(text: str) -> str:
     lowered = text.casefold()
-    if any(word in lowered for word in ('triste', 'désolée', 'désolé', 'peine', 'malheureuse')):
+    if any(word in lowered for word in ('triste', 'désolée', 'désolé', 'peine', 'malheureuse', '[soupir]', '[pleure]')):
         return 'sad'
-    if any(word in lowered for word in ('assez', 'harsh', 'damn', 'agacée', 'énervée')):
+    if any(word in lowered for word in ('assez', 'harsh', 'damn', 'agacée', 'énervée', '[fronce les sourcils]')):
         return 'annoyed'
-    if any(word in lowered for word in ('adorable', 'j’adore', "j'adore", 'heureuse', 'cute', 'trop bien')) or '!' in text:
-        return 'happy'
-    if '?' in text or any(word in lowered for word in ('curieuse', 'intriguée', 'intéressant', 'wild')):
-        return 'curious'
-    if any(word in lowered for word in ('timide', 'rougis', 'mignon')):
+    if any(word in lowered for word in ('timide', 'rougis', 'rougit', 'mignon', '[rougit]')):
         return 'shy'
+    if '?' in text or any(word in lowered for word in ('curieuse', 'intriguée', 'intéressant', 'wild', '[penche la tête]')):
+        return 'curious'
+    if any(word in lowered for word in ('adorable', 'j’adore', "j'adore", 'heureuse', 'contente', 'cute', 'trop bien', '[sourit]', '[rit]', '[rire]')) or '!' in text:
+        return 'happy'
     return 'neutral'
 
 
@@ -140,7 +142,10 @@ async def chat(payload: ChatRequest):
         )
         ACTIVE_CHAT_PROCESSES[payload.turn_id] = process
         try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(message.encode('utf-8')), timeout=150)
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(message.encode('utf-8')),
+                timeout=CHAT_TIMEOUT_SECONDS,
+            )
         except asyncio.TimeoutError:
             process.kill()
             await process.wait()
@@ -193,8 +198,6 @@ def build_qwen_tts_request(text: str, instructions: str = '') -> urllib.request.
         'voice': QWEN_TTS_VOICE,
         'input': text,
         'response_format': 'wav',
-        'force_chunking': True,
-        'one_sentence_per_chunk': True,
         'temperature': 0.15,
         'top_p': 0.8,
     }
@@ -238,11 +241,49 @@ def prepare_spoken_text(text: str) -> str:
     return re.sub(r'\s+', ' ', spoken).strip()
 
 
+def split_spoken_chunks(text: str, max_chars: int = 220) -> list[str]:
+    sentences = [part.strip() for part in re.split(r'(?<=[.!?])\s+', text) if part.strip()]
+    chunks: list[str] = []
+    prefix = ''
+    for sentence in sentences:
+        if len(sentence) < 24 and not prefix:
+            prefix = sentence
+            continue
+        if prefix:
+            sentence = f'{prefix} {sentence}'
+            prefix = ''
+        while len(sentence) > max_chars:
+            cut = sentence.rfind(' ', 0, max_chars + 1)
+            if cut < max_chars // 2:
+                cut = max_chars
+            chunks.append(sentence[:cut].strip())
+            sentence = sentence[cut:].strip()
+        if sentence:
+            chunks.append(sentence)
+    if prefix:
+        if chunks and len(chunks[-1]) + len(prefix) + 1 <= max_chars:
+            chunks[-1] = f'{chunks[-1]} {prefix}'
+        else:
+            chunks.append(prefix)
+    return chunks
+
+
 def extract_tts_instructions(text: str) -> str:
     directions = [part.strip() for part in re.findall(r'\[([^\]]+)\]', text) if part.strip()]
     if not directions:
         return ''
     return 'Interprète naturellement les indications suivantes sans les prononcer : ' + ' ; '.join(directions) + '.'
+
+
+@app.post('/api/tts/plan')
+async def tts_plan(payload: TTSRequest):
+    spoken = prepare_spoken_text(payload.text)
+    if not spoken:
+        raise HTTPException(status_code=422, detail='Aucun texte à prononcer.')
+    return {
+        'chunks': split_spoken_chunks(spoken),
+        'instructions': payload.instructions or extract_tts_instructions(payload.text),
+    }
 
 
 async def transcribe_local_audio(audio: bytes, content_type: str) -> str:
@@ -277,7 +318,7 @@ async def stt(request: Request):
 @app.post('/api/tts')
 async def tts(payload: TTSRequest, background_tasks: BackgroundTasks):
     spoken = prepare_spoken_text(payload.text)
-    instructions = extract_tts_instructions(payload.text)
+    instructions = payload.instructions or extract_tts_instructions(payload.text)
     if not spoken:
         raise HTTPException(status_code=422, detail='Aucun texte à prononcer.')
     fd, path = tempfile.mkstemp(prefix='ani-', suffix='.wav')

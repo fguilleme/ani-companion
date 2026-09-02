@@ -124,30 +124,70 @@ function cancelActiveAniTurn({removeBubble=false}={}){
   activeAssistantBubble=null;aniTurnActive=false;
 }
 
+async function fetchAudioChunk(text,emotion,instructions,turnId){
+  ttsController=new AbortController();
+  const response=await fetch('/api/tts',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text,emotion,instructions,turn_id:turnId}),signal:ttsController.signal});
+  if(turnId!==activeTurnId)return null;
+  if(!response.ok)throw new Error('Voix indisponible');
+  return response.blob();
+}
+
+function waitForAudioStop(turnId){
+  return new Promise(resolve=>{
+    let settled=false;
+    const finish=event=>{
+      if(settled)return;
+      const reachedEnd=event.type==='ended'||player.ended||(Number.isFinite(player.duration)&&player.duration>0&&player.currentTime>=player.duration-.05);
+      settled=true;
+      player.removeEventListener('ended',finish);player.removeEventListener('pause',finish);player.removeEventListener('error',finish);
+      resolve(reachedEnd&&turnId===activeTurnId);
+    };
+    player.addEventListener('ended',finish);player.addEventListener('pause',finish);player.addEventListener('error',finish);
+  });
+}
+
 async function speak(text,emotion,turnId){
   if(!voiceEnabled)return;
   ttsController=new AbortController();
-  const response=await fetch('/api/tts',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text,emotion,turn_id:turnId}),signal:ttsController.signal});
+  const planResponse=await fetch('/api/tts/plan',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text,emotion,turn_id:turnId}),signal:ttsController.signal});
   if(turnId!==activeTurnId)return;
-  if(!response.ok)throw new Error('Voix indisponible');
-  const blob=await response.blob();
-  if(turnId!==activeTurnId)return;
-  if(activeAudioUrl)URL.revokeObjectURL(activeAudioUrl);
-  activeAudioUrl=URL.createObjectURL(blob);player.src=activeAudioUrl;player.dataset.turnId=String(turnId);
-  const envelopePromise=buildAudioEnvelope(blob);
-  avatar.classList.add('speaking');
-  await player.play();
-  if(turnId!==activeTurnId){player.pause();return}
-  showSpeech(text,player.duration);
-  const envelope=await envelopePromise;
-  if(turnId!==activeTurnId)return;
-  startLipSync(envelope);
+  if(!planResponse.ok)throw new Error('Voix indisponible');
+  const plan=await planResponse.json();
+  const chunks=plan.chunks||[];
+  if(!chunks.length)throw new Error('Voix indisponible');
+  let pendingAudio=fetchAudioChunk(chunks[0],emotion,plan.instructions,turnId);
+  for(let index=0;index<chunks.length;index++){
+    const blob=await pendingAudio;
+    if(!blob||turnId!==activeTurnId)return;
+    if(index+1<chunks.length)pendingAudio=fetchAudioChunk(chunks[index+1],emotion,plan.instructions,turnId);
+    else pendingAudio=null;
+    if(activeAudioUrl)URL.revokeObjectURL(activeAudioUrl);
+    activeAudioUrl=URL.createObjectURL(blob);player.src=activeAudioUrl;player.dataset.turnId=String(turnId);
+    const envelopePromise=buildAudioEnvelope(blob);
+    const finished=waitForAudioStop(turnId);
+    avatar.classList.add('speaking');
+    await player.play();
+    if(turnId!==activeTurnId){player.pause();return}
+    showSpeech(chunks[index],player.duration);
+    const envelope=await envelopePromise;
+    if(turnId!==activeTurnId)return;
+    startLipSync(envelope);
+    if(!await finished)return;
+  }
+  hideSpeech();aniTurnActive=false;activeAssistantBubble=null;
 }
-player.addEventListener('ended',()=>{
-  stopLipSync();hideSpeech();
-  if(Number(player.dataset.turnId)===activeTurnId){aniTurnActive=false;activeAssistantBubble=null}
-});
+player.addEventListener('ended',()=>{stopLipSync();hideSpeech()});
 player.addEventListener('pause',stopLipSync);
+
+function motionForText(text=''){
+  const normalized=text.toLowerCase();
+  if(/\[(?:danse|dance|dansant)\]/.test(normalized))return 'dance';
+  if(/\[(?:tourne|tourne sur elle-même|spin)\]/.test(normalized))return 'spin';
+  if(/\[(?:saute|jump)\]/.test(normalized))return 'jump';
+  if(/\[(?:se balance|balance|sway)\]/.test(normalized))return 'sway';
+  if(/\[(?:taquine|tease)\]/.test(normalized))return 'tease';
+  return null;
+}
 
 form.addEventListener('submit',async event=>{
   event.preventDefault();const message=input.value.trim();if(!message)return;
@@ -161,6 +201,7 @@ form.addEventListener('submit',async event=>{
     if(turnId!==activeTurnId)return;
     if(data.session_id)localStorage.setItem('ani.session',data.session_id);
     thinking.hidden=true;setEmotion(data.emotion);
+    const replyMotion=motionForText(data.reply);if(replyMotion)window.aniAvatar?.playMotion(replyMotion);
     activeAssistantBubble=bubble(data.reply,'ani',{collapsible:true});
     if(voiceEnabled)await speak(data.reply,data.emotion,turnId);
     else{showSpeech(data.reply);aniTurnActive=false;activeAssistantBubble=null}
@@ -262,6 +303,13 @@ function startUtterance(){
 
 function monitorVoiceActivity(){
   if(!microphoneMode)return;
+  if(!player.paused&&!player.ended){
+    silenceStarted=0;
+    if(utteranceRecorder?.state==='recording'){
+      discardRecording=true;utteranceRecorder.stop();
+    }
+    micFrame=requestAnimationFrame(monitorVoiceActivity);return;
+  }
   micAnalyser.getByteTimeDomainData(micWaveform);
   let energy=0;
   for(const sample of micWaveform){const value=(sample-128)/128;energy+=value*value}

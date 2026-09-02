@@ -45,17 +45,27 @@ let activeEmotionValue = 0;
 let cameraReturnTimer = null;
 let cameraReturning = false;
 let touchPoint = null;
+let activeMotion = null;
+let motionStartedAt = 0;
+let motionCameraActive = false;
 const defaultCameraPosition = new THREE.Vector3();
 const defaultCameraTarget = new THREE.Vector3();
+const actionCameraPosition = new THREE.Vector3();
+const actionCameraTarget = new THREE.Vector3();
+const baseAvatarPosition = new THREE.Vector3();
+const baseAvatarRotation = new THREE.Euler();
 const idleBones = {};
 const emotionMap = {
   neutral: null,
-  happy: ['happy', 0.45],
-  sad: ['sad', 0.65],
-  annoyed: ['angry', 0.55],
-  curious: ['surprised', 0.3],
-  shy: ['happy', 0.3],
+  happy: ['happy', 0.72],
+  sad: ['sad', 0.8],
+  angry: ['angry', 0.7],
+  annoyed: ['angry', 0.7],
+  curious: ['surprised', 0.58],
+  shy: ['relaxed', 0.5],
 };
+const motionDurations = { dance: 4200, spin: 2400, jump: 900, sway: 2800, tease: 1800 };
+const moodExpressions = ['happy', 'sad', 'angry', 'surprised', 'relaxed'];
 
 function expression(name, value) {
   if (vrm?.expressionManager && name) vrm.expressionManager.setValue(name, THREE.MathUtils.clamp(value, 0, 1));
@@ -107,7 +117,10 @@ function poseNaturally(model) {
   if (rightUpperArm) rightUpperArm.rotation.z += 1.4;
   if (leftLowerArm) leftLowerArm.rotation.z -= 0.03;
   if (rightLowerArm) rightLowerArm.rotation.z += 0.03;
-  for (const name of ['spine', 'chest', 'head']) {
+  for (const name of [
+    'hips', 'spine', 'chest', 'head',
+    'leftUpperArm', 'rightUpperArm', 'leftLowerArm', 'rightLowerArm',
+  ]) {
     const node = bone(name);
     if (node) idleBones[name] = { node, base: node.rotation.clone() };
   }
@@ -122,10 +135,22 @@ function frameModel(model) {
   const distance = visibleHeight / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2)) * 1.04;
   defaultCameraTarget.set(center.x, targetY, center.z);
   defaultCameraPosition.set(center.x, targetY, center.z + distance);
+
+  model.scene.updateMatrixWorld(true);
+  const leftKnee = model.humanoid?.getNormalizedBoneNode('leftLowerLeg');
+  const rightKnee = model.humanoid?.getNormalizedBoneNode('rightLowerLeg');
+  const kneePositions = [leftKnee, rightKnee].filter(Boolean).map(node => node.getWorldPosition(new THREE.Vector3()).y);
+  const kneeY = kneePositions.length ? kneePositions.reduce((sum, value) => sum + value, 0) / kneePositions.length : box.min.y + size.y * 0.24;
+  const actionHeight = Math.max(size.y * 0.55, box.max.y - kneeY);
+  const actionTargetY = kneeY + actionHeight * 0.5;
+  const actionDistance = actionHeight / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2)) * 1.12;
+  actionCameraTarget.set(center.x, actionTargetY, center.z);
+  actionCameraPosition.set(center.x, actionTargetY, center.z + actionDistance);
+
   camera.position.copy(defaultCameraPosition);
   controls.target.copy(defaultCameraTarget);
   controls.minDistance = distance * 0.72;
-  controls.maxDistance = distance * 1.45;
+  controls.maxDistance = actionDistance * 1.15;
   controls.update();
   lookTarget.position.set(camera.position.x, box.max.y - size.y * 0.11, camera.position.z);
   if (model.lookAt) model.lookAt.target = lookTarget;
@@ -181,6 +206,8 @@ loader.load('/models/ani.vrm', (gltf) => {
   VRMUtils.removeUnnecessaryVertices(gltf.scene);
   VRMUtils.removeUnnecessaryJoints(gltf.scene);
   VRMUtils.rotateVRM0(vrm);
+  baseAvatarPosition.copy(vrm.scene.position);
+  baseAvatarRotation.copy(vrm.scene.rotation);
   tuneMaterials(vrm);
   poseNaturally(vrm);
   scene.add(vrm.scene);
@@ -217,10 +244,70 @@ function updateMouth(elapsed) {
   expression('ou', mouthOpen * (phase === 2 ? 0.24 : 0.02));
 }
 
+function playMotion(name) {
+  if (!motionDurations[name] || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return false;
+  activeMotion = name;
+  motionStartedAt = performance.now();
+  motionCameraActive = ['dance', 'spin', 'jump'].includes(name);
+  cameraReturning = !motionCameraActive;
+  return true;
+}
+
+function applySpeakingMotion(elapsed) {
+  if (mouthOpen > 0.025 && idleBones.head) {
+    idleBones.head.node.rotation.x += Math.sin(elapsed * 2.6) * 0.018;
+    idleBones.head.node.rotation.y += Math.sin(elapsed * 1.9) * 0.025;
+    idleBones.head.node.rotation.z += Math.sin(elapsed * 1.3) * 0.008;
+    if (idleBones.chest) idleBones.chest.node.rotation.y += Math.sin(elapsed * 1.5) * 0.01;
+  }
+}
+
+function applyActiveMotion(now) {
+  if (!activeMotion) return;
+  const progress = (now - motionStartedAt) / motionDurations[activeMotion];
+  if (progress >= 1) {
+    activeMotion = null;
+    if (motionCameraActive) {
+      motionCameraActive = false;
+      cameraReturning = true;
+    }
+    return;
+  }
+  const wave = Math.sin(progress * Math.PI * 8);
+  if (activeMotion === 'spin') {
+    vrm.scene.rotation.y += progress * Math.PI * 2;
+  } else if (activeMotion === 'jump') {
+    vrm.scene.position.y += Math.sin(progress * Math.PI) * 0.1;
+    if (idleBones.leftUpperArm) idleBones.leftUpperArm.node.rotation.x -= Math.sin(progress * Math.PI) * 0.55;
+    if (idleBones.rightUpperArm) idleBones.rightUpperArm.node.rotation.x -= Math.sin(progress * Math.PI) * 0.55;
+  } else if (activeMotion === 'sway') {
+    if (idleBones.hips) idleBones.hips.node.rotation.z += Math.sin(progress * Math.PI * 4) * 0.07;
+    if (idleBones.chest) idleBones.chest.node.rotation.z -= Math.sin(progress * Math.PI * 4) * 0.045;
+    if (idleBones.head) idleBones.head.node.rotation.z += Math.sin(progress * Math.PI * 4) * 0.035;
+  } else if (activeMotion === 'tease') {
+    if (idleBones.head) {
+      idleBones.head.node.rotation.z += Math.sin(progress * Math.PI) * 0.13;
+      idleBones.head.node.rotation.x -= Math.sin(progress * Math.PI * 2) * 0.035;
+    }
+    if (idleBones.chest) idleBones.chest.node.rotation.y += Math.sin(progress * Math.PI) * 0.06;
+  } else if (activeMotion === 'dance') {
+    vrm.scene.position.y += Math.abs(wave) * 0.025;
+    if (idleBones.hips) idleBones.hips.node.rotation.z += wave * 0.09;
+    if (idleBones.chest) idleBones.chest.node.rotation.z -= wave * 0.07;
+    if (idleBones.head) idleBones.head.node.rotation.y += Math.sin(progress * Math.PI * 6) * 0.12;
+    if (idleBones.leftUpperArm) idleBones.leftUpperArm.node.rotation.x += wave * 0.42;
+    if (idleBones.rightUpperArm) idleBones.rightUpperArm.node.rotation.x -= wave * 0.42;
+  }
+}
+
 renderer.setAnimationLoop(() => {
   const delta = Math.min(clock.getDelta(), 0.05);
   const elapsed = clock.elapsedTime;
-  if (cameraReturning) {
+  if (motionCameraActive) {
+    const blend = 1 - Math.exp(-delta * 3.8);
+    camera.position.lerp(actionCameraPosition, blend);
+    controls.target.lerp(actionCameraTarget, blend);
+  } else if (cameraReturning) {
     const blend = 1 - Math.exp(-delta * 4.2);
     camera.position.lerp(defaultCameraPosition, blend);
     controls.target.lerp(defaultCameraTarget, blend);
@@ -234,6 +321,8 @@ renderer.setAnimationLoop(() => {
   if (vrm) {
     updateBlink(elapsed);
     updateMouth(elapsed);
+    vrm.scene.position.copy(baseAvatarPosition);
+    vrm.scene.rotation.copy(baseAvatarRotation);
     for (const { node, base } of Object.values(idleBones)) node.rotation.copy(base);
     if (idleBones.spine) idleBones.spine.node.rotation.z += Math.sin(elapsed * 0.7) * 0.012;
     if (idleBones.chest) idleBones.chest.node.rotation.x += Math.sin(elapsed * 0.5) * 0.008;
@@ -241,6 +330,8 @@ renderer.setAnimationLoop(() => {
       idleBones.head.node.rotation.y += Math.sin(elapsed * 0.36) * 0.035;
       idleBones.head.node.rotation.x += Math.sin(elapsed * 0.51) * 0.012;
     }
+    applySpeakingMotion(elapsed);
+    applyActiveMotion(performance.now());
     vrm.update(delta);
   }
   renderer.render(scene, camera);
@@ -250,4 +341,15 @@ function getCameraState() {
   return { position: camera.position.toArray(), target: controls.target.toArray() };
 }
 
-window.aniAvatar = { setEmotion, setMouthOpen, reactToTouch, getCameraState };
+function getAnimationState() {
+  const values = {};
+  for (const name of moodExpressions) values[name] = vrm?.expressionManager?.getValue(name) || 0;
+  return {
+    ready: Boolean(vrm), activeMotion, emotion: activeEmotion, expressions: values,
+    headRotation: idleBones.head ? [idleBones.head.node.rotation.x, idleBones.head.node.rotation.y, idleBones.head.node.rotation.z] : null,
+    avatarPosition: vrm?.scene.position.toArray() || null,
+    avatarRotation: vrm ? [vrm.scene.rotation.x, vrm.scene.rotation.y, vrm.scene.rotation.z] : null,
+  };
+}
+
+window.aniAvatar = { setEmotion, setMouthOpen, playMotion, reactToTouch, getCameraState, getAnimationState };
