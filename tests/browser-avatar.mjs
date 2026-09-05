@@ -40,7 +40,7 @@ try {
     await route.fulfill({ status: 200, contentType: 'audio/wav', body: silentWav() });
   });
   await page.addInitScript(() => {
-    localStorage.setItem('ani.voice', 'off');
+    localStorage.setItem('ani.voice', 'on');
     localStorage.setItem('ani.microphone', 'off');
     const nativeFetch = window.fetch.bind(window);
     window.fetch = async (input, init = {}) => {
@@ -125,7 +125,7 @@ try {
   const dance = await page.evaluate(() => window.aniAvatar.getAnimationState());
   if (dance.activeMotion !== 'dance') fail(`Danse non déclenchée par la réponse: ${JSON.stringify(dance)}`);
 
-  await page.click('#voice-toggle');
+  // voice-toggle remplacé par la jauge de contexte
   await page.evaluate(() => {
     window.__aniPlayedChunks = 0;
     window.__aniFirstAudioAt = 0;

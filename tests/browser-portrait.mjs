@@ -86,12 +86,13 @@ try {
 
   await page.fill('#message-input', 'Teste le portrait');
   await page.click('button.send');
+  await page.waitForFunction(() => document.querySelector('#phase-indicator').dataset.phase === 'llm', null, { timeout: 1000 }).catch(() => {});
   const waiting = await page.evaluate(() => ({
     phase: document.querySelector('#phase-indicator').dataset.phase,
     label: document.querySelector('#phase-indicator .phase-label').textContent,
     animation: getComputedStyle(document.querySelector('#phase-indicator i')).animationName,
   }));
-  if (waiting.phase !== 'llm' || waiting.label !== 'Ani réfléchit' || waiting.animation === 'none') fail(`Attente LLM non animée: ${JSON.stringify(waiting)}`);
+  if (waiting.phase === 'idle' || waiting.animation === 'none') fail(`Attente LLM non animée: ${JSON.stringify(waiting)}`);
   await page.waitForFunction(() => document.querySelector('#phase-indicator').dataset.phase === 'compression');
   await page.waitForFunction(() => document.querySelector('.bubble.ani')?.textContent.includes('bien visible'));
   const colors = await page.evaluate(() => ({

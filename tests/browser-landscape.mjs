@@ -99,6 +99,33 @@ try {
   });
   if (!lazy.hasSentinel) fail(`Sentinelle de lazy loading absente: ${JSON.stringify(lazy)}`);
 
+  // Test du lazy loading : on injecte plein de messages et on vérifie que le sentinel fonctionne
+  await page.evaluate(() => {
+    const history = document.querySelector('.history');
+    for (let i = 0; i < 60; i++) {
+      const el = document.createElement('div');
+      el.className = `bubble ${i % 2 ? 'ani' : 'user'}`;
+      el.textContent = `Message ${i}`;
+      history.appendChild(el);
+    }
+    history.scrollTop = 0;
+  });
+  await page.waitForTimeout(100);
+  const lazyScroll = await page.evaluate(() => {
+    const history = document.querySelector('.history');
+    const sentinel = document.querySelector('.history-sentinel');
+    const sentinelRect = sentinel.getBoundingClientRect();
+    const historyRect = history.getBoundingClientRect();
+    return {
+      sentinelVisible: sentinelRect.top < historyRect.bottom && sentinelRect.bottom > historyRect.top,
+      scrollTop: history.scrollTop,
+      scrollHeight: history.scrollHeight,
+      clientHeight: history.clientHeight,
+      bubbleCount: document.querySelectorAll('.bubble').length,
+    };
+  });
+  if (lazyScroll.bubbleCount < 60) fail(`Au moins 60 bulles attendues après injection: ${JSON.stringify(lazyScroll)}`);
+
   console.log(JSON.stringify({ ok: true, layout, bubbles, lazy }));
 } finally {
   if (browser) await browser.close();

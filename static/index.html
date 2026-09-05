@@ -20,7 +20,9 @@
       <header class="topbar">
         <div><strong>Ani</strong><span id="status"><i></i> présente</span></div>
         <div class="top-actions">
-          <button id="voice-toggle" class="round-control active" type="button" aria-label="Activer ou couper la voix" aria-pressed="true">♪</button>
+          <div id="context-meter" class="context-meter" role="progressbar" aria-label="Contexte utilisé" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <div class="context-meter-fill"></div>
+          </div>
           <button id="install-button" class="install-control" type="button" hidden>Installer</button>
         </div>
       </header>
@@ -39,8 +41,16 @@
     <section class="conversation" aria-label="Conversation avec Ani">
       <div class="history-sentinel" aria-hidden="true"></div>
       <div id="history" class="history" aria-live="polite"></div>
+      <div class="history-sentinel-bottom" aria-hidden="true"></div>
       <form id="chat-form" autocomplete="off">
-        <button id="mic-button" class="mic" type="button" aria-label="Parler à Ani">●</button>
+        <button id="mic-button" class="mic" type="button" aria-label="Parler à Ani">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+            <line x1="12" y1="19" x2="12" y2="23"/>
+            <line x1="8" y1="23" x2="16" y2="23"/>
+          </svg>
+        </button>
         <label class="composer"><span class="sr-only">Message</span><input id="message-input" maxlength="12000" placeholder="Dis quelque chose à Ani…" enterkeyhint="send" autocomplete="off" autocorrect="off" autocapitalize="sentences" spellcheck="false"></label>
         <button class="send" type="submit" aria-label="Envoyer">↑</button>
       </form>

@@ -3,9 +3,11 @@ const form=document.getElementById('chat-form');
 const input=document.getElementById('message-input');
 const history=document.getElementById('history');
 const historySentinel=document.querySelector('.history-sentinel');
+const historySentinelBottom=document.querySelector('.history-sentinel-bottom');
 const player=document.getElementById('voice-player');
 const statusPlayer=document.getElementById('status-player');
-const voiceToggle=document.getElementById('voice-toggle');
+const contextMeter=document.getElementById('context-meter');
+const contextMeterFill=contextMeter?.querySelector('.context-meter-fill');
 const micButton=document.getElementById('mic-button');
 const installButton=document.getElementById('install-button');
 const phaseIndicator=document.getElementById('phase-indicator');
@@ -14,14 +16,12 @@ const phaseTime=phaseIndicator.querySelector('time');
 const SESSION_GENERATION='4';
 const MAX_SESSION_TURNS=12;
 if(localStorage.getItem('ani.session.generation')!==SESSION_GENERATION){
-  localStorage.removeItem('ani.session');
-  localStorage.removeItem('ani.session.turns');
-  localStorage.setItem('ani.session.generation',SESSION_GENERATION);
+localStorage.removeItem('ani.session');
+localStorage.removeItem('ani.session.turns');
+localStorage.setItem('ani.session.generation',SESSION_GENERATION);
 }
 let voiceEnabled=localStorage.getItem('ani.voice')!=='off';
 let deferredInstall=null;
-voiceToggle.classList.toggle('active',voiceEnabled);
-voiceToggle.setAttribute('aria-pressed',String(voiceEnabled));
 
 function setEmotion(emotion='neutral'){
   [...avatar.classList].filter(x=>x.startsWith('emotion-')).forEach(x=>avatar.classList.remove(x));
@@ -40,27 +40,42 @@ function bubbleLandscape(text,who){
   history.appendChild(el);return el;
 }
 function ensureLandscapeObserver(){
-  if(landscapeObserver||!historySentinel)return;
+  if(landscapeObserver||!historySentinelBottom)return;
   landscapeObserver=new IntersectionObserver(entries=>{
     if(!entries[0].isIntersecting)return;
     renderLandscapeHistoryBatch();
-  },{root:history,rootMargin:'100px 0px 0px 0px',threshold:0});
-  landscapeObserver.observe(historySentinel);
+  },{root:history,rootMargin:'0px 0px 100px 0px',threshold:0});
+  landscapeObserver.observe(historySentinelBottom);
 }
 function renderLandscapeHistoryBatch(){
-  const batch=landscapeHistory.slice(landscapeHistoryIndex,landscapeHistoryIndex+LANDSCAPE_HISTORY_BATCH);
-  for(const item of batch)bubbleLandscape(item.text,item.who);
-  landscapeHistoryIndex+=batch.length;
-  if(landscapeHistoryIndex>=landscapeHistory.length&&landscapeObserver){
+  if(!landscapeHistory.length)return;
+  const start=Math.max(0,landscapeHistoryIndex-LANDSCAPE_HISTORY_BATCH);
+  const batch=landscapeHistory.slice(start,landscapeHistoryIndex);
+  const frag=document.createDocumentFragment();
+  for(const item of batch){
+    const el=document.createElement('div');el.className=`bubble ${item.who}`;el.textContent=item.text;
+    frag.appendChild(el);
+  }
+  history.insertBefore(frag,history.firstChild);
+  landscapeHistoryIndex=start;
+  if(landscapeHistoryIndex<=0&&landscapeObserver){
     landscapeObserver.disconnect();landscapeObserver=null;
   }
-  history.scrollTop=history.scrollHeight;
+  history.scrollTop=0;
 }
 function resetLandscapeHistory(){
   landscapeHistory=[];landscapeHistoryIndex=0;
   if(landscapeObserver){landscapeObserver.disconnect();landscapeObserver=null}
   history.replaceChildren();
   if(historySentinel)history.appendChild(historySentinel);
+  if(historySentinelBottom)history.appendChild(historySentinelBottom);
+  ensureLandscapeObserver();
+}
+function pushLandscapeMessage(text,who){
+  landscapeHistory.push({text,who});
+  const el=bubbleLandscape(text,who);
+  history.scrollTop=history.scrollHeight;
+  return el;
 }
 const ENVELOPE_FPS=60;
 const SILENT_WAV='data:audio/wav;base64,UklGRkQDAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YSADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==';
@@ -87,6 +102,9 @@ let statusController=null;
 let statusNoticeToken=0;
 let currentStatusKind=null;
 let statusTurnKey=null;
+let contextTokensUsed=0;
+let contextTokensMax=65000;
+refreshContextMeter();
 const LANDSCAPE_HISTORY_BATCH=20;
 let landscapeHistory=[];
 let landscapeHistoryIndex=0;
@@ -116,6 +134,26 @@ function setPhase(phase='idle'){
   phaseIndicator.setAttribute('aria-label',labels[phase]||phase);
   phaseStartedAt=performance.now();renderPhaseTime();clearInterval(phaseClock);phaseClock=null;
   if(phase!=='idle')phaseClock=setInterval(renderPhaseTime,250);
+}
+function updateContextMeter(used,max){
+  if(!contextMeterFill)return;
+  contextTokensUsed=used;contextTokensMax=max;
+  const pct=Math.min(100,Math.round((used/max)*100));
+  contextMeterFill.style.width=`${pct}%`;
+  contextMeter.setAttribute('aria-valuenow',String(pct));
+  contextMeter.setAttribute('aria-label',`Contexte: ${used} / ${max} tokens (${pct}%)`);
+  if(pct>90)contextMeterFill.style.background='#ff5a5a';
+  else if(pct>70)contextMeterFill.style.background='#ffbd68';
+  else contextMeterFill.style.background='var(--accent)';
+}
+function estimateContextTokens(){
+  const turns=Math.max(0,Number.parseInt(localStorage.getItem('ani.session.turns')||'0',10)||0);
+  const baseTokens=3000;
+  const tokensPerTurn=1200;
+  return Math.min(contextTokensMax,baseTokens+turns*tokensPerTurn);
+}
+function refreshContextMeter(){
+  updateContextMeter(estimateContextTokens(),contextTokensMax);
 }
 function randomStatusPhrase(kind){
   const phrases=STATUS_PHRASES[kind]||[];
@@ -387,6 +425,7 @@ function sessionForNextTurn(){
     localStorage.removeItem('ani.session');
     localStorage.removeItem('ani.session.turns');
     sessionId=null;turns=0;
+    refreshContextMeter();
   }
   return {sessionId,turnNumber:turns+1};
 }
@@ -412,8 +451,8 @@ form.addEventListener('submit',async event=>{
   streamingSpeech=voiceEnabled?createStreamingSpeech(turnId):null;
   const sessionState=sessionForNextTurn();
   input.blur();unlockAudio();input.value='';history.replaceChildren();setEmotion('curious');setPhase('llm');
-  if(isLandscapeLayout())resetLandscapeHistory();
-  bubble(message,'user');
+  if(isLandscapeLayout()){resetLandscapeHistory();pushLandscapeMessage(message,'user')}
+  else bubble(message,'user');
   let streamedText='';
   let completed=null;
   if(!slowWakeNoticeUsed)slowWakeTimer=setTimeout(()=>{
@@ -431,6 +470,7 @@ form.addEventListener('submit',async event=>{
         if(event.session_id){
           localStorage.setItem('ani.session',event.session_id);
           localStorage.setItem('ani.session.turns',String(sessionState.turnNumber));
+          refreshContextMeter();
         }
         activeTurnKey=event.turn_key||null;
         streamingSpeech?.setTurnKey(activeTurnKey);
@@ -442,7 +482,10 @@ form.addEventListener('submit',async event=>{
         setPhase('answering');
         streamedText+=event.text||'';
         const display=streamingDisplayText(streamedText);
-        if(!activeAssistantBubble)activeAssistantBubble=bubble(display,'ani');
+        if(!activeAssistantBubble){
+          if(isLandscapeLayout())activeAssistantBubble=pushLandscapeMessage(display,'ani');
+          else activeAssistantBubble=bubble(display,'ani');
+        }
         else activeAssistantBubble.textContent=display;
         history.scrollTop=history.scrollHeight;
         return;
@@ -467,7 +510,11 @@ form.addEventListener('submit',async event=>{
     if(!completed)throw new Error('La réponse d’Ani a été interrompue.');
     if(completed.session_id)localStorage.setItem('ani.session',completed.session_id);
     clearTimeout(slowWakeTimer);slowWakeTimer=null;setEmotion(completed.emotion);setPhase('idle');
-    if(!activeAssistantBubble)activeAssistantBubble=bubble(completed.reply,'ani');
+    refreshContextMeter();
+    if(!activeAssistantBubble){
+      if(isLandscapeLayout())activeAssistantBubble=pushLandscapeMessage(completed.reply,'ani');
+      else activeAssistantBubble=bubble(completed.reply,'ani');
+    }
     else activeAssistantBubble.textContent=completed.reply;
     const replyMotion=completed.actions?.[0]?.name;if(replyMotion)window.aniAvatar?.playMotion(replyMotion);
     if(streamingSpeech){
@@ -480,10 +527,17 @@ form.addEventListener('submit',async event=>{
     streamingSpeech?.cancel();streamingSpeech=null;
     player.pause();stopLipSync();
     clearTimeout(slowWakeTimer);slowWakeTimer=null;setPhase('idle');
-    aniTurnActive=false;activeAssistantBubble=null;setEmotion('sad');bubble(error.message,'ani');
+    aniTurnActive=false;activeAssistantBubble=null;setEmotion('sad');
+    if(isLandscapeLayout())pushLandscapeMessage(error.message,'ani');
+    else bubble(error.message,'ani');
   }
 });
-voiceToggle.addEventListener('click',()=>{voiceEnabled=!voiceEnabled;localStorage.setItem('ani.voice',voiceEnabled?'on':'off');voiceToggle.classList.toggle('active',voiceEnabled);voiceToggle.setAttribute('aria-pressed',String(voiceEnabled));if(!voiceEnabled){streamingSpeech?.cancel();player.pause();stopStatusNotice()}});
+document.addEventListener('keydown',event=>{
+  if(event.key==='m'||event.key==='M'){
+    voiceEnabled=!voiceEnabled;localStorage.setItem('ani.voice',voiceEnabled?'on':'off');
+    if(!voiceEnabled){streamingSpeech?.cancel();player.pause();stopStatusNotice()}
+  }
+});
 
 const microphoneErrorMessage=error=>{
   const code=error?.error||error?.name;

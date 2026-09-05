@@ -9,7 +9,8 @@
     "test": "/home/francois/.hermes/hermes-agent/venv/bin/python -m unittest discover -s tests -v && node --check static/app.js && node --check src/avatar-3d.js",
     "test:browser": "node tests/browser-avatar.mjs",
     "test:browser:streaming": "node tests/browser-streaming.mjs",
-    "test:browser:portrait": "node tests/browser-portrait.mjs"
+    "test:browser:portrait": "node tests/browser-portrait.mjs",
+    "test:browser:landscape": "node tests/browser-landscape.mjs"
   },
   "dependencies": {
     "@pixiv/three-vrm": "^3.5.5",

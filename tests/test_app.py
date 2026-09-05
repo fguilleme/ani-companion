@@ -707,7 +707,7 @@ class AniCompanionTests(unittest.TestCase):
         script = (ROOT / 'static' / 'app.js').read_text()
         html = (ROOT / 'static' / 'index.html').read_text()
         self.assertIn("history.replaceChildren();setEmotion('curious');setPhase('llm')", script)
-        self.assertIn("if(isLandscapeLayout())resetLandscapeHistory();", script)
+        self.assertIn("if(isLandscapeLayout()){resetLandscapeHistory();pushLandscapeMessage(message,'user')}", script)
         self.assertIn("bubble(message,'user');", script)
         self.assertIn("bubble(display,'ani')", script)
         self.assertNotIn('id="speech"', html)
@@ -770,7 +770,7 @@ class AniCompanionTests(unittest.TestCase):
 
     def test_interface_has_avatar_chat_voice_and_install_controls(self):
         html = (ROOT / 'static' / 'index.html').read_text()
-        for required in ('ani-avatar', 'chat-form', 'mic-button', 'voice-toggle', 'install-button'):
+        for required in ('ani-avatar', 'chat-form', 'mic-button', 'context-meter', 'install-button'):
             self.assertIn(f'id="{required}"', html)
         self.assertIn('serviceWorker.register', html)
 
