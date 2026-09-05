@@ -11,7 +11,7 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icons/ani-192.png" type="image/png">
   <link rel="apple-touch-icon" href="/icons/ani-192.png">
-  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/style.css?v=29">
 </head>
 <body>
   <main class="companion-shell">
@@ -25,17 +25,19 @@
         </div>
       </header>
 
+      <div id="phase-indicator" class="phase-indicator" data-phase="idle" aria-label="Prête">
+        <i aria-hidden="true"></i><span class="phase-label">Prête</span><time aria-hidden="true">00:00</time>
+      </div>
+
       <div id="ani-avatar" class="avatar emotion-neutral" aria-live="polite">
         <div class="avatar-shadow" aria-hidden="true"></div>
         <canvas id="avatar-canvas" aria-label="Ani, avatar 3D animé"></canvas>
         <div id="avatar-loading" class="avatar-loading">Chargement d’Ani…</div>
       </div>
-
-      <div id="speech" class="speech" hidden></div>
-      <div id="thinking" class="thinking" hidden><span></span><span></span><span></span></div>
     </section>
 
     <section class="conversation" aria-label="Conversation avec Ani">
+      <div class="history-sentinel" aria-hidden="true"></div>
       <div id="history" class="history" aria-live="polite"></div>
       <form id="chat-form" autocomplete="off">
         <button id="mic-button" class="mic" type="button" aria-label="Parler à Ani">●</button>
@@ -45,8 +47,9 @@
     </section>
   </main>
   <audio id="voice-player" preload="none"></audio>
+  <audio id="status-player" preload="none"></audio>
   <script src="/avatar-3d.bundle.js" defer></script>
-  <script src="/app.js" defer></script>
+  <script src="/app.js?v=29" defer></script>
   <script>if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js'))</script>
 </body>
 </html>

@@ -28,7 +28,8 @@ try {
   }
 
   browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage({ viewport: { width: 430, height: 850 }, deviceScaleFactor: 1 });
+  const context = await browser.newContext({ viewport: { width: 430, height: 850 }, deviceScaleFactor: 1, serviceWorkers: 'block' });
+  const page = await context.newPage();
   const consoleErrors = [];
   const ttsRequests = [];
   page.on('console', message => { if (message.type() === 'error') consoleErrors.push(message.text()); });
@@ -143,7 +144,7 @@ try {
   } catch {
     const audioState = await page.evaluate(() => {
       const player = document.querySelector('#voice-player');
-      return { playedChunks: window.__aniPlayedChunks, paused: player.paused, ended: player.ended, currentTime: player.currentTime, duration: player.duration, speech: document.querySelector('#speech').textContent };
+      return { playedChunks: window.__aniPlayedChunks, paused: player.paused, ended: player.ended, currentTime: player.currentTime, duration: player.duration };
     });
     fail(`Lecture multi-segments interrompue: ${JSON.stringify({ audioState, ttsRequests, consoleErrors })}`);
   }
@@ -160,7 +161,7 @@ try {
 
   await page.evaluate(() => {
     document.querySelector('.topbar').hidden = true;
-    document.querySelector('#speech').hidden = true;
+
   });
   await page.locator('#avatar-canvas').screenshot({ path: '/tmp/ani-avatar-canvas.png' });
   await page.screenshot({ path: '/tmp/ani-avatar-motions.png' });

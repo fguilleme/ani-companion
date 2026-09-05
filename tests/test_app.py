@@ -259,9 +259,11 @@ class AniCompanionTests(unittest.TestCase):
 
     def test_pwa_starts_a_fresh_session_after_context_migration(self):
         script = (ROOT / 'static' / 'app.js').read_text()
-        self.assertIn("const SESSION_GENERATION='2'", script)
+        self.assertIn("const SESSION_GENERATION='4'", script)
+        self.assertIn('const MAX_SESSION_TURNS=12', script)
         self.assertIn("localStorage.getItem('ani.session.generation')", script)
         self.assertIn("localStorage.removeItem('ani.session')", script)
+        self.assertIn("localStorage.removeItem('ani.session.turns')", script)
         self.assertIn("localStorage.setItem('ani.session.generation',SESSION_GENERATION)", script)
 
     def test_failed_streaming_audio_chunk_is_skipped_without_stopping_later_chunks(self):
@@ -295,7 +297,7 @@ class AniCompanionTests(unittest.TestCase):
 
     def test_disabling_voice_cancels_streaming_audio_queue(self):
         script = (ROOT / 'static' / 'app.js').read_text()
-        self.assertIn("if(!voiceEnabled){streamingSpeech?.cancel();player.pause()}", script)
+        self.assertIn("if(!voiceEnabled){streamingSpeech?.cancel();player.pause();stopStatusNotice()}", script)
 
     def test_stream_failure_stops_current_audio_and_lip_sync(self):
         script = (ROOT / 'static' / 'app.js').read_text()
@@ -303,7 +305,7 @@ class AniCompanionTests(unittest.TestCase):
         catch_block = script[catch_start:catch_start + 320]
         self.assertIn('player.pause()', catch_block)
         self.assertIn('stopLipSync()', catch_block)
-        self.assertIn('hideSpeech()', catch_block)
+        self.assertIn('stopLipSync()', catch_block)
 
     def test_pwa_displays_stream_error_message(self):
         script = (ROOT / 'static' / 'app.js').read_text()
@@ -348,6 +350,21 @@ class AniCompanionTests(unittest.TestCase):
                         'payload': {'text': 'Deuxième phrase'},
                     }},
                     {'jsonrpc': '2.0', 'method': 'event', 'params': {
+                        'type': 'status.update',
+                        'session_id': 'runtime-1',
+                        'payload': {'kind': 'compacting', 'text': 'Compacting context'},
+                    }},
+                    {'jsonrpc': '2.0', 'method': 'event', 'params': {
+                        'type': 'status.update',
+                        'session_id': 'runtime-1',
+                        'payload': {'kind': 'compacting', 'text': 'Still compacting'},
+                    }},
+                    {'jsonrpc': '2.0', 'method': 'event', 'params': {
+                        'type': 'status.update',
+                        'session_id': 'runtime-1',
+                        'payload': {'kind': 'compacted', 'text': 'Compression complete'},
+                    }},
+                    {'jsonrpc': '2.0', 'method': 'event', 'params': {
                         'type': 'message.complete',
                         'session_id': 'runtime-1',
                         'payload': {'text': '(French) Bonjour François, je suis bien là. Deuxième phrase complète.'},
@@ -376,12 +393,14 @@ class AniCompanionTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         events = [json.loads(line) for line in response.text.splitlines()]
         event_types = [event['type'] for event in events]
-        self.assertEqual(event_types, ['start', 'delta', 'speech', 'delta', 'delta', 'speech', 'complete'])
+        self.assertEqual(event_types, ['start', 'delta', 'speech', 'delta', 'phase', 'phase', 'delta', 'speech', 'complete'])
         self.assertLess(event_types.index('speech'), event_types.index('complete'))
         self.assertEqual(events[0]['session_id'], 'stored-1')
         self.assertEqual(events[2]['text'], 'Bonjour François, je suis bien là.')
-        self.assertEqual(events[4]['text'], ' complète.')
-        self.assertEqual(events[5]['text'], 'Deuxième phrase complète.')
+        self.assertEqual(events[4], {'type': 'phase', 'phase': 'compression'})
+        self.assertEqual(events[5], {'type': 'phase', 'phase': 'llm'})
+        self.assertEqual(events[6]['text'], ' complète.')
+        self.assertEqual(events[7]['text'], 'Deuxième phrase complète.')
         self.assertEqual(events[-1]['reply'], 'Bonjour François, je suis bien là. Deuxième phrase complète.')
         process_call = create_process.await_args_list[0]
         process_env = process_call.kwargs['env']
@@ -560,7 +579,7 @@ class AniCompanionTests(unittest.TestCase):
 
     def test_microphone_vad_ignores_ani_speaker_output(self):
         script = (ROOT / 'static' / 'app.js').read_text()
-        guard = "if(!player.paused&&!player.ended)"
+        guard = "if((!player.paused&&!player.ended)||(!statusPlayer.paused&&!statusPlayer.ended))"
         self.assertIn(guard, script)
         self.assertLess(script.index(guard), script.index("if(rms>0.028)"))
 
@@ -684,32 +703,23 @@ class AniCompanionTests(unittest.TestCase):
         self.assertIn('function motionForText', script)
         self.assertIn("window.aniAvatar?.playMotion(replyMotion)", script)
 
-    def test_assistant_reply_uses_ticker_and_expandable_imessage_bubble(self):
+    def test_conversation_shows_only_the_current_streaming_exchange(self):
+        script = (ROOT / 'static' / 'app.js').read_text()
+        html = (ROOT / 'static' / 'index.html').read_text()
+        self.assertIn("history.replaceChildren();setEmotion('curious');setPhase('llm')", script)
+        self.assertIn("if(isLandscapeLayout())resetLandscapeHistory();", script)
+        self.assertIn("bubble(message,'user');", script)
+        self.assertIn("bubble(display,'ani')", script)
+        self.assertNotIn('id="speech"', html)
+
+    def test_phase_indicator_distinguishes_waiting_from_streaming_reply(self):
         script = (ROOT / 'static' / 'app.js').read_text()
         css = (ROOT / 'static' / 'style.css').read_text()
-        self.assertIn("bubble(completed.reply,'ani',{collapsible:true})", script)
-        self.assertIn("bubble(display,'ani',{collapsible:true})", script)
-        self.assertIn("el.setAttribute('aria-expanded','false')", script)
-        self.assertIn("el.classList.toggle('expanded')", script)
-        self.assertIn("ticker.className='speech-line'", script)
-        self.assertIn('speech.replaceChildren(ticker)', script)
-        self.assertIn('ticker.scrollWidth<=speech.clientWidth', script)
-        self.assertIn("fill:'forwards'", script)
-        self.assertIn('white-space:nowrap', css)
-        self.assertIn('-webkit-line-clamp:2', css)
-        self.assertIn('min-height:54px', css)
-        self.assertIn('.bubble.ani.collapsible.expanded', css)
-        self.assertIn('background:#0a84ff', css)
-        self.assertIn('.history:not(:empty){height:18vh}', css)
-
-    def test_ticker_starts_with_audio_playback_and_uses_wav_duration(self):
-        script = (ROOT / 'static' / 'app.js').read_text()
-        self.assertIn('async function playAudioChunk(item,turnId)', script)
-        self.assertIn('await player.play();', script)
-        play_start = script.index('async function playAudioChunk(item,turnId)')
-        play_block = script[play_start:play_start + 1500]
-        self.assertLess(play_block.index('if(turnId!==activeTurnId){player.pause();return false}'), play_block.index('showSpeech(item.text,player.duration);'))
-        self.assertIn('durationSeconds*1000', script)
+        self.assertIn("llm:'Ani réfléchit'", script)
+        self.assertIn("answering:'Ani répond'", script)
+        self.assertIn("setPhase('answering')", script)
+        self.assertIn('.phase-indicator[data-phase="answering"]', css)
+        self.assertIn('animation:phase-answer', css)
 
     def test_local_stt_endpoint_returns_whisper_transcript(self):
         client = TestClient(app)
@@ -725,13 +735,29 @@ class AniCompanionTests(unittest.TestCase):
 
     def test_service_worker_precaches_avatar_runtime(self):
         worker = (ROOT / 'static' / 'sw.js').read_text()
-        self.assertIn("const CACHE='ani-companion-v23'", worker)
+        self.assertIn("const CACHE='ani-companion-v29'", worker)
         self.assertIn("'/avatar-3d.bundle.js'", worker)
 
     def test_service_worker_activates_pipeline_update_immediately(self):
         worker = (ROOT / 'static' / 'sw.js').read_text()
         self.assertIn('self.skipWaiting()', worker)
         self.assertIn('self.clients.claim()', worker)
+        self.assertNotIn("client.navigate(client.url)", worker)
+
+    def test_interface_assets_are_cache_busted_for_installed_pwa(self):
+        html = (ROOT / 'static' / 'index.html').read_text()
+        worker = (ROOT / 'static' / 'sw.js').read_text()
+        self.assertIn('href="/style.css?v=29"', html)
+        self.assertIn('src="/app.js?v=29"', html)
+        self.assertIn("'/style.css?v=29'", worker)
+        self.assertIn("'/app.js?v=29'", worker)
+
+    def test_phase_timer_does_not_flood_accessibility_announcements(self):
+        html = (ROOT / 'static' / 'index.html').read_text()
+        css = (ROOT / 'static' / 'style.css').read_text()
+        self.assertNotIn('role="status" aria-live="polite"', html)
+        self.assertIn('<time aria-hidden="true">00:00</time>', html)
+        self.assertIn('.phase-indicator i{animation:none!important}', css)
 
     def test_manifest_is_installable_pwa(self):
         manifest = json.loads((ROOT / 'static' / 'manifest.webmanifest').read_text())

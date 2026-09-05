@@ -25,7 +25,8 @@ try {
     await delay(100);
   }
   browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage({ viewport: { width: 430, height: 850 } });
+  const context = await browser.newContext({ viewport: { width: 430, height: 850 }, serviceWorkers: 'block' });
+  const page = await context.newPage();
   const ttsRequests = [];
   await page.route('**/api/tts', async route => {
     ttsRequests.push(route.request().postDataJSON().text);

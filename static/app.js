@@ -2,15 +2,20 @@ const avatar=document.getElementById('ani-avatar');
 const form=document.getElementById('chat-form');
 const input=document.getElementById('message-input');
 const history=document.getElementById('history');
-const speech=document.getElementById('speech');
-const thinking=document.getElementById('thinking');
+const historySentinel=document.querySelector('.history-sentinel');
 const player=document.getElementById('voice-player');
+const statusPlayer=document.getElementById('status-player');
 const voiceToggle=document.getElementById('voice-toggle');
 const micButton=document.getElementById('mic-button');
 const installButton=document.getElementById('install-button');
-const SESSION_GENERATION='2';
+const phaseIndicator=document.getElementById('phase-indicator');
+const phaseLabel=phaseIndicator.querySelector('.phase-label');
+const phaseTime=phaseIndicator.querySelector('time');
+const SESSION_GENERATION='4';
+const MAX_SESSION_TURNS=12;
 if(localStorage.getItem('ani.session.generation')!==SESSION_GENERATION){
   localStorage.removeItem('ani.session');
+  localStorage.removeItem('ani.session.turns');
   localStorage.setItem('ani.session.generation',SESSION_GENERATION);
 }
 let voiceEnabled=localStorage.getItem('ani.voice')!=='off';
@@ -23,36 +28,46 @@ function setEmotion(emotion='neutral'){
   avatar.classList.add(`emotion-${emotion}`);
   window.aniAvatar?.setEmotion(emotion);
 }
-function bubble(text,who,{collapsible=false}={}){
+function bubble(text,who){
   const el=document.createElement('div');el.className=`bubble ${who}`;el.textContent=text;
-  if(collapsible){
-    el.classList.add('collapsible');el.tabIndex=0;el.setAttribute('role','button');el.setAttribute('aria-expanded','false');
-    const toggle=()=>{const expanded=el.classList.toggle('expanded');el.setAttribute('aria-expanded',String(expanded));history.scrollTop=history.scrollHeight};
-    el.addEventListener('click',toggle);
-    el.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();toggle()}});
-  }
   history.appendChild(el);history.scrollTop=history.scrollHeight;return el;
 }
-let speechAnimation=null;
-function hideSpeech(){speechAnimation?.cancel();speechAnimation=null;speech.hidden=true}
-function showSpeech(text,durationSeconds=0){
-  const clean=text.replace(/^\([^)]+\)\s*/,'').replace(/\[[^\]]+\]/g,' ').replace(/\s+/g,' ').trim();
-  const ticker=document.createElement('span');ticker.className='speech-line';ticker.textContent=clean;
-  speech.replaceChildren(ticker);speech.hidden=false;speechAnimation?.cancel();
-  requestAnimationFrame(()=>{
-    if(ticker.scrollWidth<=speech.clientWidth){ticker.style.width='100%';ticker.style.textAlign='center';return}
-    const distance=ticker.scrollWidth-speech.clientWidth+24;
-    speechAnimation=ticker.animate(
-      [{transform:'translateX(0)'},{transform:`translateX(-${distance}px)`}],
-      {duration:Number.isFinite(durationSeconds)&&durationSeconds>0?Math.max(1000,durationSeconds*1000):Math.max(7000,distance*28),iterations:1,easing:'linear',fill:'forwards'},
-    );
-  });
+function isLandscapeLayout(){
+  return window.matchMedia('(min-width:800px) and (orientation:landscape)').matches;
+}
+function bubbleLandscape(text,who){
+  const el=document.createElement('div');el.className=`bubble ${who}`;el.textContent=text;
+  history.appendChild(el);return el;
+}
+function ensureLandscapeObserver(){
+  if(landscapeObserver||!historySentinel)return;
+  landscapeObserver=new IntersectionObserver(entries=>{
+    if(!entries[0].isIntersecting)return;
+    renderLandscapeHistoryBatch();
+  },{root:history,rootMargin:'100px 0px 0px 0px',threshold:0});
+  landscapeObserver.observe(historySentinel);
+}
+function renderLandscapeHistoryBatch(){
+  const batch=landscapeHistory.slice(landscapeHistoryIndex,landscapeHistoryIndex+LANDSCAPE_HISTORY_BATCH);
+  for(const item of batch)bubbleLandscape(item.text,item.who);
+  landscapeHistoryIndex+=batch.length;
+  if(landscapeHistoryIndex>=landscapeHistory.length&&landscapeObserver){
+    landscapeObserver.disconnect();landscapeObserver=null;
+  }
+  history.scrollTop=history.scrollHeight;
+}
+function resetLandscapeHistory(){
+  landscapeHistory=[];landscapeHistoryIndex=0;
+  if(landscapeObserver){landscapeObserver.disconnect();landscapeObserver=null}
+  history.replaceChildren();
+  if(historySentinel)history.appendChild(historySentinel);
 }
 const ENVELOPE_FPS=60;
 const SILENT_WAV='data:audio/wav;base64,UklGRkQDAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YSADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==';
 let audioEnvelope=[];
 let mouthFrame=null;
 let audioUnlocked=false;
+let audioUnlockPromise=null;
 let activeTurnId=0;
 let activeTurnKey=null;
 let aniTurnActive=false;
@@ -63,6 +78,78 @@ let activeAssistantBubble=null;
 let activeAudioUrl=null;
 let turnTimingStarted=performance.now();
 let lastAudioEndedAt=null;
+let phaseStartedAt=performance.now();
+let phaseClock=null;
+let slowWakeTimer=null;
+let slowWakeNoticeUsed=false;
+let statusAudioUrl=null;
+let statusController=null;
+let statusNoticeToken=0;
+let currentStatusKind=null;
+let statusTurnKey=null;
+const LANDSCAPE_HISTORY_BATCH=20;
+let landscapeHistory=[];
+let landscapeHistoryIndex=0;
+let landscapeObserver=null;
+const STATUS_PHRASES={
+  compression:[
+    'Excuse-moi, je range mes idées.',
+    'Une seconde, je remets mes pensées dans le bon ordre.',
+    'Attends-moi un instant, je classe nos souvenirs.',
+  ],
+  waking:[
+    'Je me réveille. Après un bon café, ça ira mieux.',
+    'Une petite seconde, mon cerveau démarre doucement.',
+    'Je sors du brouillard. Le café imaginaire arrive.',
+  ],
+};
+const lastStatusPhrase={};
+
+function renderPhaseTime(){
+  const seconds=Math.max(0,Math.floor((performance.now()-phaseStartedAt)/1000));
+  phaseTime.textContent=`${String(Math.floor(seconds/60)).padStart(2,'0')}:${String(seconds%60).padStart(2,'0')}`;
+}
+function setPhase(phase='idle'){
+  const labels={idle:'Prête',transcription:'Transcription',llm:'Ani réfléchit',answering:'Ani répond',compression:'Compression'};
+  if(phaseIndicator.dataset.phase===phase)return;
+  phaseIndicator.dataset.phase=phase;phaseLabel.textContent=labels[phase]||phase;
+  phaseIndicator.setAttribute('aria-label',labels[phase]||phase);
+  phaseStartedAt=performance.now();renderPhaseTime();clearInterval(phaseClock);phaseClock=null;
+  if(phase!=='idle')phaseClock=setInterval(renderPhaseTime,250);
+}
+function randomStatusPhrase(kind){
+  const phrases=STATUS_PHRASES[kind]||[];
+  if(!phrases.length)return '';
+  let index=Math.floor(Math.random()*phrases.length);
+  if(phrases.length>1&&index===lastStatusPhrase[kind])index=(index+1)%phrases.length;
+  lastStatusPhrase[kind]=index;
+  return phrases[index];
+}
+function stopStatusNotice(){
+  statusNoticeToken++;currentStatusKind=null;
+  if(statusTurnKey){fetch('/api/tts/cancel',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({turn_key:statusTurnKey}),keepalive:true}).catch(()=>{});statusTurnKey=null}
+  statusController?.abort();statusController=null;statusPlayer.pause();statusPlayer.removeAttribute('src');statusPlayer.load();
+  if(statusAudioUrl){URL.revokeObjectURL(statusAudioUrl);statusAudioUrl=null}
+}
+async function playStatusNotice(kind){
+  if(!voiceEnabled)return;
+  if(kind!=='compression'&&currentStatusKind)return;
+  stopStatusNotice();currentStatusKind=kind;
+  const token=++statusNoticeToken;
+  statusTurnKey=`status-${Date.now()}-${Math.random().toString(36).slice(2,10)}`;
+  if(!audioUnlocked&&audioUnlockPromise)await audioUnlockPromise.catch(()=>{});
+  if(token!==statusNoticeToken||!audioUnlocked||!voiceEnabled)return;
+  const text=randomStatusPhrase(kind);if(!text)return;
+  const controller=new AbortController();statusController=controller;
+  try{
+    const response=await fetch('/api/tts',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text,emotion:kind==='compression'?'curious':'neutral',turn_key:statusTurnKey}),signal:controller.signal});
+    if(!response.ok||token!==statusNoticeToken)return;
+    const audioUrl=URL.createObjectURL(await response.blob());
+    if(token!==statusNoticeToken){URL.revokeObjectURL(audioUrl);return}
+    statusAudioUrl=audioUrl;statusPlayer.src=statusAudioUrl;
+    await statusPlayer.play();
+  }catch(error){if(error?.name!=='AbortError')console.warn('Annonce vocale indisponible',error)}
+}
 
 function reportAudioTiming(event,{turnKey=activeTurnKey,chunkSeq=0,durationMs=null,text='',detail=''}={}){
   const elapsedMs=Math.max(0,performance.now()-turnTimingStarted);
@@ -73,12 +160,17 @@ function reportAudioTiming(event,{turnKey=activeTurnKey,chunkSeq=0,durationMs=nu
 
 function unlockAudio(){
   if(!voiceEnabled||audioUnlocked)return;
-  player.src=SILENT_WAV;
-  player.volume=0;
-  const attempt=player.play();
-  if(attempt)attempt.then(()=>{
-    player.pause();player.currentTime=0;player.volume=1;audioUnlocked=true;
-  }).catch(error=>{player.volume=1;console.warn('Déverrouillage audio refusé',error)});
+  if(audioUnlockPromise)return audioUnlockPromise;
+  for(const audio of [player,statusPlayer]){audio.src=SILENT_WAV;audio.volume=0}
+  const attempts=[player.play(),statusPlayer.play()].filter(Boolean);
+  audioUnlockPromise=Promise.all(attempts).then(()=>{
+    for(const audio of [player,statusPlayer]){audio.pause();audio.currentTime=0;audio.volume=1}
+    audioUnlocked=true;
+  }).catch(error=>{
+    for(const audio of [player,statusPlayer])audio.volume=1;
+    console.warn('Déverrouillage audio refusé',error);
+  }).finally(()=>{audioUnlockPromise=null});
+  return audioUnlockPromise;
 }
 
 async function buildAudioEnvelope(blob){
@@ -131,13 +223,14 @@ function cancelActiveAniTurn({removeBubble=false}={}){
   const turnKey=activeTurnKey;
   if(aniTurnActive&&turnKey)fetch('/api/cancel',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({turn_key:turnKey}),keepalive:true}).catch(()=>{});
   activeTurnId++;activeTurnKey=null;
+  clearTimeout(slowWakeTimer);slowWakeTimer=null;stopStatusNotice();setPhase('idle');
   chatController?.abort();chatController=null;
   streamingSpeech?.cancel();streamingSpeech=null;
   ttsController?.abort();ttsController=null;
   player.pause();
   if(activeAudioUrl){URL.revokeObjectURL(activeAudioUrl);activeAudioUrl=null}
   player.removeAttribute('src');player.load();
-  hideSpeech();stopLipSync();thinking.hidden=true;setEmotion('neutral');
+  stopLipSync();setEmotion('neutral');
   if(removeBubble&&aniTurnActive&&activeAssistantBubble?.isConnected)activeAssistantBubble.remove();
   activeAssistantBubble=null;aniTurnActive=false;
 }
@@ -176,6 +269,7 @@ function waitForAudioStop(turnId){
 async function playAudioChunk(item,turnId){
   const blob=item.blob;
   if(!blob||turnId!==activeTurnId)return false;
+  stopStatusNotice();
   if(activeAudioUrl)URL.revokeObjectURL(activeAudioUrl);
   activeAudioUrl=URL.createObjectURL(blob);player.src=activeAudioUrl;player.dataset.turnId=String(turnId);
   const envelopePromise=buildAudioEnvelope(blob);
@@ -187,7 +281,6 @@ async function playAudioChunk(item,turnId){
   const playStarted=performance.now();
   const gapMs=lastAudioEndedAt===null?null:Math.max(0,playStarted-lastAudioEndedAt);
   reportAudioTiming('audio.play.started',{chunkSeq:item.chunkSeq,text:item.text,durationMs:Number.isFinite(player.duration)?player.duration*1000:null,detail:gapMs===null?'first_chunk':`gap_ms=${gapMs.toFixed(1)}`});
-  showSpeech(item.text,player.duration);
   const envelope=await envelopePromise;
   if(turnId!==activeTurnId)return false;
   startLipSync(envelope);
@@ -287,8 +380,19 @@ function streamingDisplayText(text){
     .replace(/\s+/g,' ')
     .trim();
 }
-player.addEventListener('ended',()=>{stopLipSync();hideSpeech()});
+function sessionForNextTurn(){
+  let sessionId=localStorage.getItem('ani.session');
+  let turns=Math.max(0,Number.parseInt(localStorage.getItem('ani.session.turns')||'0',10)||0);
+  if(sessionId&&turns>=MAX_SESSION_TURNS){
+    localStorage.removeItem('ani.session');
+    localStorage.removeItem('ani.session.turns');
+    sessionId=null;turns=0;
+  }
+  return {sessionId,turnNumber:turns+1};
+}
+player.addEventListener('ended',stopLipSync);
 player.addEventListener('pause',stopLipSync);
+statusPlayer.addEventListener('ended',stopStatusNotice);
 
 function motionForText(text=''){
   const normalized=text.toLowerCase();
@@ -306,58 +410,80 @@ form.addEventListener('submit',async event=>{
   turnTimingStarted=performance.now();lastAudioEndedAt=null;
   chatController=new AbortController();
   streamingSpeech=voiceEnabled?createStreamingSpeech(turnId):null;
-  input.blur();unlockAudio();input.value='';bubble(message,'user');thinking.hidden=false;setEmotion('curious');
+  const sessionState=sessionForNextTurn();
+  input.blur();unlockAudio();input.value='';history.replaceChildren();setEmotion('curious');setPhase('llm');
+  if(isLandscapeLayout())resetLandscapeHistory();
+  bubble(message,'user');
   let streamedText='';
   let completed=null;
+  if(!slowWakeNoticeUsed)slowWakeTimer=setTimeout(()=>{
+    if(aniTurnActive&&!streamedText&&phaseIndicator.dataset.phase==='llm'&&voiceEnabled){
+      slowWakeNoticeUsed=true;playStatusNotice('waking');
+    }
+  },6000);
   try{
-    const response=await fetch('/api/chat/stream',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message,session_id:localStorage.getItem('ani.session'),turn_id:turnId}),signal:chatController.signal});
+    const response=await fetch('/api/chat/stream',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message,session_id:sessionState.sessionId,turn_id:turnId}),signal:chatController.signal});
     if(turnId!==activeTurnId)return;
     if(!response.ok){const data=await response.json();throw new Error(data.detail||'Ani ne répond pas')}
     await readNdjson(response,async event=>{
       if(turnId!==activeTurnId)return;
       if(event.type==='start'){
-        if(event.session_id)localStorage.setItem('ani.session',event.session_id);
+        if(event.session_id){
+          localStorage.setItem('ani.session',event.session_id);
+          localStorage.setItem('ani.session.turns',String(sessionState.turnNumber));
+        }
         activeTurnKey=event.turn_key||null;
         streamingSpeech?.setTurnKey(activeTurnKey);
         return;
       }
       if(event.type==='delta'){
+        clearTimeout(slowWakeTimer);slowWakeTimer=null;
+        stopStatusNotice();
+        setPhase('answering');
         streamedText+=event.text||'';
         const display=streamingDisplayText(streamedText);
-        if(!activeAssistantBubble)activeAssistantBubble=bubble(display,'ani',{collapsible:true});
+        if(!activeAssistantBubble)activeAssistantBubble=bubble(display,'ani');
         else activeAssistantBubble.textContent=display;
-        thinking.hidden=true;
         history.scrollTop=history.scrollHeight;
         return;
       }
       if(event.type==='speech'){
+        clearTimeout(slowWakeTimer);slowWakeTimer=null;stopStatusNotice();
         setEmotion(event.emotion||'neutral');
         streamingSpeech?.push(event.text,event.emotion);
         return;
       }
+      if(event.type==='phase'&&event.phase==='compression'){
+        clearTimeout(slowWakeTimer);slowWakeTimer=null;
+        if(phaseIndicator.dataset.phase!=='compression'){setPhase('compression');playStatusNotice('compression')}
+        return;
+      }
+      if(event.type==='phase'&&event.phase==='llm'){setPhase('llm');return}
+      if(event.type==='phase'&&event.phase==='compacted'){setPhase('llm');stopStatusNotice();return}
       if(event.type==='error')throw new Error(event.message||'Ani ne répond pas');
       if(event.type==='complete')completed=event;
     });
     if(turnId!==activeTurnId)return;
     if(!completed)throw new Error('La réponse d’Ani a été interrompue.');
     if(completed.session_id)localStorage.setItem('ani.session',completed.session_id);
-    thinking.hidden=true;setEmotion(completed.emotion);
-    if(!activeAssistantBubble)activeAssistantBubble=bubble(completed.reply,'ani',{collapsible:true});
+    clearTimeout(slowWakeTimer);slowWakeTimer=null;setEmotion(completed.emotion);setPhase('idle');
+    if(!activeAssistantBubble)activeAssistantBubble=bubble(completed.reply,'ani');
     else activeAssistantBubble.textContent=completed.reply;
     const replyMotion=completed.actions?.[0]?.name;if(replyMotion)window.aniAvatar?.playMotion(replyMotion);
     if(streamingSpeech){
       streamingSpeech.close();
       await streamingSpeech.done;
-    }else showSpeech(completed.reply);
-    if(turnId===activeTurnId){hideSpeech();aniTurnActive=false;activeAssistantBubble=null;streamingSpeech=null}
+    }
+    if(turnId===activeTurnId){aniTurnActive=false;activeAssistantBubble=null;streamingSpeech=null}
   }catch(error){
     if(error.name==='AbortError'||turnId!==activeTurnId)return;
     streamingSpeech?.cancel();streamingSpeech=null;
-    player.pause();stopLipSync();hideSpeech();
-    thinking.hidden=true;aniTurnActive=false;activeAssistantBubble=null;setEmotion('sad');bubble(error.message,'ani');
+    player.pause();stopLipSync();
+    clearTimeout(slowWakeTimer);slowWakeTimer=null;setPhase('idle');
+    aniTurnActive=false;activeAssistantBubble=null;setEmotion('sad');bubble(error.message,'ani');
   }
 });
-voiceToggle.addEventListener('click',()=>{voiceEnabled=!voiceEnabled;localStorage.setItem('ani.voice',voiceEnabled?'on':'off');voiceToggle.classList.toggle('active',voiceEnabled);voiceToggle.setAttribute('aria-pressed',String(voiceEnabled));if(!voiceEnabled){streamingSpeech?.cancel();player.pause()}});
+voiceToggle.addEventListener('click',()=>{voiceEnabled=!voiceEnabled;localStorage.setItem('ani.voice',voiceEnabled?'on':'off');voiceToggle.classList.toggle('active',voiceEnabled);voiceToggle.setAttribute('aria-pressed',String(voiceEnabled));if(!voiceEnabled){streamingSpeech?.cancel();player.pause();stopStatusNotice()}});
 
 const microphoneErrorMessage=error=>{
   const code=error?.error||error?.name;
@@ -419,13 +545,13 @@ async function transcribeUtterance(blob){
 }
 
 function queueTranscription(blob){
-  queuedTranscriptions++;transcribing=true;micButton.classList.add('transcribing');
+  queuedTranscriptions++;transcribing=true;micButton.classList.add('transcribing');setPhase('transcription');
   transcriptionQueue=transcriptionQueue
     .then(()=>transcribeUtterance(blob))
     .catch(error=>bubble(microphoneErrorMessage(error),'ani'))
     .finally(()=>{
       queuedTranscriptions--;
-      if(!queuedTranscriptions){transcribing=false;micButton.classList.remove('transcribing')}
+      if(!queuedTranscriptions){transcribing=false;micButton.classList.remove('transcribing');if(!aniTurnActive)setPhase('idle')}
       scheduleTranscriptCommit();
     });
 }
@@ -450,7 +576,7 @@ function startUtterance(){
 
 function monitorVoiceActivity(){
   if(!microphoneMode)return;
-  if(!player.paused&&!player.ended){
+  if((!player.paused&&!player.ended)||(!statusPlayer.paused&&!statusPlayer.ended)){
     silenceStarted=0;
     if(utteranceRecorder?.state==='recording'){
       discardRecording=true;utteranceRecorder.stop();

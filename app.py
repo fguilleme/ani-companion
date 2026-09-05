@@ -560,6 +560,7 @@ async def stream_chat_events(payload: ChatRequest, turn_key: str):
     reply_parts: list[str] = []
     stored_session_id = payload.session_id
     notifications: deque[dict] = deque()
+    compression_active = False
     deadline = asyncio.get_running_loop().time() + CHAT_TIMEOUT_SECONDS
     try:
         async with _semaphore_before_deadline(RUN_SEMAPHORE, deadline):
@@ -659,6 +660,17 @@ async def stream_chat_events(payload: ChatRequest, turn_key: str):
                 if event_type == 'session.info':
                     stored_session_id = event_payload.get('stored_session_id') or stored_session_id
                     continue
+                if event_type == 'status.update':
+                    status_kind = event_payload.get('kind')
+                    if status_kind == 'compacting':
+                        if not compression_active:
+                            compression_active = True
+                            yield _stream_event('phase', phase='compression')
+                        continue
+                    if status_kind == 'compacted' and compression_active:
+                        compression_active = False
+                        yield _stream_event('phase', phase='llm')
+                        continue
                 if event_type == 'message.delta':
                     delta = str(event_payload.get('text') or '')
                     if not delta:
