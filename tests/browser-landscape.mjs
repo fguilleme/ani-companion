@@ -99,32 +99,21 @@ try {
   });
   if (!lazy.hasSentinel) fail(`Sentinelle de lazy loading absente: ${JSON.stringify(lazy)}`);
 
-  // Test du lazy loading : on injecte plein de messages et on vérifie que le sentinel fonctionne
-  await page.evaluate(() => {
-    const history = document.querySelector('.history');
-    for (let i = 0; i < 60; i++) {
-      const el = document.createElement('div');
-      el.className = `bubble ${i % 2 ? 'ani' : 'user'}`;
-      el.textContent = `Message ${i}`;
-      history.appendChild(el);
-    }
-    history.scrollTop = 0;
+  // Lazy loading : on pousse 30 messages via le hook de test, le DOM reste limité
+  // au dernier batch, puis remonter en haut recharge les anciens.
+  const pushed = await page.evaluate(() => {
+    if (!window.__aniTestPush) return { missing: true };
+    for (let i = 0; i < 30; i++) window.__aniTestPush(`Message ${i}`, i % 2 ? 'ani' : 'user');
+    return { missing: false, rendered: document.querySelectorAll('.bubble').length };
   });
-  await page.waitForTimeout(100);
-  const lazyScroll = await page.evaluate(() => {
-    const history = document.querySelector('.history');
-    const sentinel = document.querySelector('.history-sentinel');
-    const sentinelRect = sentinel.getBoundingClientRect();
-    const historyRect = history.getBoundingClientRect();
-    return {
-      sentinelVisible: sentinelRect.top < historyRect.bottom && sentinelRect.bottom > historyRect.top,
-      scrollTop: history.scrollTop,
-      scrollHeight: history.scrollHeight,
-      clientHeight: history.clientHeight,
-      bubbleCount: document.querySelectorAll('.bubble').length,
-    };
-  });
-  if (lazyScroll.bubbleCount < 60) fail(`Au moins 60 bulles attendues après injection: ${JSON.stringify(lazyScroll)}`);
+  if (pushed.missing) fail('Hook de test __aniTestPush absent');
+  if (pushed.rendered > 21) fail(`Le DOM devrait être limité à ~20 bulles: ${JSON.stringify(pushed)}`);
+  await page.evaluate(() => { document.querySelector('.history').scrollTop = 0; });
+  await page.waitForFunction(() => document.querySelectorAll('.bubble').length > 21, null, { timeout: 5000 });
+  const reloaded = await page.evaluate(() => ({
+    rendered: document.querySelectorAll('.bubble').length,
+  }));
+  if (reloaded.rendered < 30) fail(`Les anciens messages n'ont pas été rechargés: ${JSON.stringify(reloaded)}`);
 
   console.log(JSON.stringify({ ok: true, layout, bubbles, lazy }));
 } finally {

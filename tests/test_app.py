@@ -706,9 +706,9 @@ class AniCompanionTests(unittest.TestCase):
     def test_conversation_shows_only_the_current_streaming_exchange(self):
         script = (ROOT / 'static' / 'app.js').read_text()
         html = (ROOT / 'static' / 'index.html').read_text()
-        self.assertIn("history.replaceChildren();setEmotion('curious');setPhase('llm')", script)
-        self.assertIn("if(isLandscapeLayout()){resetLandscapeHistory();pushLandscapeMessage(message,'user')}", script)
-        self.assertIn("bubble(message,'user');", script)
+        self.assertIn("input.value='';setEmotion('curious');setPhase('llm')", script)
+        self.assertIn("if(isLandscapeLayout())pushLandscapeMessage(message,'user');", script)
+        self.assertIn("else{history.replaceChildren();bubble(message,'user')}", script)
         self.assertIn("bubble(display,'ani')", script)
         self.assertNotIn('id="speech"', html)
 
@@ -735,7 +735,7 @@ class AniCompanionTests(unittest.TestCase):
 
     def test_service_worker_precaches_avatar_runtime(self):
         worker = (ROOT / 'static' / 'sw.js').read_text()
-        self.assertIn("const CACHE='ani-companion-v29'", worker)
+        self.assertIn("const CACHE='ani-companion-v30'", worker)
         self.assertIn("'/avatar-3d.bundle.js'", worker)
 
     def test_service_worker_activates_pipeline_update_immediately(self):
@@ -747,10 +747,10 @@ class AniCompanionTests(unittest.TestCase):
     def test_interface_assets_are_cache_busted_for_installed_pwa(self):
         html = (ROOT / 'static' / 'index.html').read_text()
         worker = (ROOT / 'static' / 'sw.js').read_text()
-        self.assertIn('href="/style.css?v=29"', html)
-        self.assertIn('src="/app.js?v=29"', html)
-        self.assertIn("'/style.css?v=29'", worker)
-        self.assertIn("'/app.js?v=29'", worker)
+        self.assertIn('href="/style.css?v=30"', html)
+        self.assertIn('src="/app.js?v=30"', html)
+        self.assertIn("'/style.css?v=30'", worker)
+        self.assertIn("'/app.js?v=30'", worker)
 
     def test_phase_timer_does_not_flood_accessibility_announcements(self):
         html = (ROOT / 'static' / 'index.html').read_text()

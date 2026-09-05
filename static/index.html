@@ -11,7 +11,7 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icons/ani-192.png" type="image/png">
   <link rel="apple-touch-icon" href="/icons/ani-192.png">
-  <link rel="stylesheet" href="/style.css?v=29">
+  <link rel="stylesheet" href="/style.css?v=30">
 </head>
 <body>
   <main class="companion-shell">
@@ -20,15 +20,14 @@
       <header class="topbar">
         <div><strong>Ani</strong><span id="status"><i></i> présente</span></div>
         <div class="top-actions">
-          <div id="context-meter" class="context-meter" role="progressbar" aria-label="Contexte utilisé" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
-            <div class="context-meter-fill"></div>
-          </div>
           <button id="install-button" class="install-control" type="button" hidden>Installer</button>
         </div>
       </header>
 
       <div id="phase-indicator" class="phase-indicator" data-phase="idle" aria-label="Prête">
-        <i aria-hidden="true"></i><span class="phase-label">Prête</span><time aria-hidden="true">00:00</time>
+        <i aria-hidden="true"></i><span class="phase-label">Prête</span>
+        <span id="context-meter" class="context-meter" role="progressbar" aria-label="Contexte utilisé" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span class="context-meter-fill"></span></span>
+        <time aria-hidden="true">00:00</time>
       </div>
 
       <div id="ani-avatar" class="avatar emotion-neutral" aria-live="polite">
@@ -39,9 +38,7 @@
     </section>
 
     <section class="conversation" aria-label="Conversation avec Ani">
-      <div class="history-sentinel" aria-hidden="true"></div>
-      <div id="history" class="history" aria-live="polite"></div>
-      <div class="history-sentinel-bottom" aria-hidden="true"></div>
+      <div id="history" class="history" aria-live="polite"><div class="history-sentinel" aria-hidden="true"></div></div>
       <form id="chat-form" autocomplete="off">
         <button id="mic-button" class="mic" type="button" aria-label="Parler à Ani">
           <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -59,7 +56,7 @@
   <audio id="voice-player" preload="none"></audio>
   <audio id="status-player" preload="none"></audio>
   <script src="/avatar-3d.bundle.js" defer></script>
-  <script src="/app.js?v=29" defer></script>
+  <script src="/app.js?v=30" defer></script>
   <script>if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js'))</script>
 </body>
 </html>

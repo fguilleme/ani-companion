@@ -3,7 +3,6 @@ const form=document.getElementById('chat-form');
 const input=document.getElementById('message-input');
 const history=document.getElementById('history');
 const historySentinel=document.querySelector('.history-sentinel');
-const historySentinelBottom=document.querySelector('.history-sentinel-bottom');
 const player=document.getElementById('voice-player');
 const statusPlayer=document.getElementById('status-player');
 const contextMeter=document.getElementById('context-meter');
@@ -39,44 +38,51 @@ function bubbleLandscape(text,who){
   const el=document.createElement('div');el.className=`bubble ${who}`;el.textContent=text;
   history.appendChild(el);return el;
 }
+let landscapeScrollArmed=false;
 function ensureLandscapeObserver(){
-  if(landscapeObserver||!historySentinelBottom)return;
-  landscapeObserver=new IntersectionObserver(entries=>{
-    if(!entries[0].isIntersecting)return;
-    renderLandscapeHistoryBatch();
-  },{root:history,rootMargin:'0px 0px 100px 0px',threshold:0});
-  landscapeObserver.observe(historySentinelBottom);
+  if(landscapeScrollArmed||!isLandscapeLayout())return;
+  landscapeScrollArmed=true;
+  history.addEventListener('scroll',()=>{
+    if(history.scrollTop<80)renderLandscapeHistoryBatch();
+  },{passive:true});
 }
 function renderLandscapeHistoryBatch(){
   if(!landscapeHistory.length)return;
   const start=Math.max(0,landscapeHistoryIndex-LANDSCAPE_HISTORY_BATCH);
+  if(start>=landscapeHistoryIndex)return;
+  const previousHeight=history.scrollHeight;
   const batch=landscapeHistory.slice(start,landscapeHistoryIndex);
   const frag=document.createDocumentFragment();
   for(const item of batch){
     const el=document.createElement('div');el.className=`bubble ${item.who}`;el.textContent=item.text;
     frag.appendChild(el);
   }
-  history.insertBefore(frag,history.firstChild);
+  history.insertBefore(frag,historySentinel?historySentinel.nextSibling:history.firstChild);
   landscapeHistoryIndex=start;
-  if(landscapeHistoryIndex<=0&&landscapeObserver){
-    landscapeObserver.disconnect();landscapeObserver=null;
-  }
-  history.scrollTop=0;
+  history.scrollTop+=history.scrollHeight-previousHeight;
 }
 function resetLandscapeHistory(){
   landscapeHistory=[];landscapeHistoryIndex=0;
-  if(landscapeObserver){landscapeObserver.disconnect();landscapeObserver=null}
   history.replaceChildren();
   if(historySentinel)history.appendChild(historySentinel);
-  if(historySentinelBottom)history.appendChild(historySentinelBottom);
-  ensureLandscapeObserver();
 }
 function pushLandscapeMessage(text,who){
   landscapeHistory.push({text,who});
+  landscapeHistoryIndex=landscapeHistory.length;
   const el=bubbleLandscape(text,who);
+  const rendered=history.querySelectorAll('.bubble').length;
+  if(rendered>LANDSCAPE_HISTORY_BATCH){
+    const toRemove=rendered-LANDSCAPE_HISTORY_BATCH;
+    const bubbles=history.querySelectorAll('.bubble');
+    for(let i=0;i<toRemove;i++)bubbles[i].remove();
+    landscapeHistoryIndex=landscapeHistory.length-LANDSCAPE_HISTORY_BATCH;
+  }
   history.scrollTop=history.scrollHeight;
   return el;
 }
+window.__aniTestPush=(text,who)=>{if(isLandscapeLayout())pushLandscapeMessage(text,who);else bubble(text,who)};
+Object.defineProperty(window,'__aniLandscapeIndex',{get:()=>landscapeHistoryIndex});
+Object.defineProperty(window,'__aniLandscapeTotal',{get:()=>landscapeHistory.length});
 const ENVELOPE_FPS=60;
 const SILENT_WAV='data:audio/wav;base64,UklGRkQDAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YSADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==';
 let audioEnvelope=[];
@@ -108,7 +114,6 @@ refreshContextMeter();
 const LANDSCAPE_HISTORY_BATCH=20;
 let landscapeHistory=[];
 let landscapeHistoryIndex=0;
-let landscapeObserver=null;
 const STATUS_PHRASES={
   compression:[
     'Excuse-moi, je range mes idées.',
@@ -450,9 +455,9 @@ form.addEventListener('submit',async event=>{
   chatController=new AbortController();
   streamingSpeech=voiceEnabled?createStreamingSpeech(turnId):null;
   const sessionState=sessionForNextTurn();
-  input.blur();unlockAudio();input.value='';history.replaceChildren();setEmotion('curious');setPhase('llm');
-  if(isLandscapeLayout()){resetLandscapeHistory();pushLandscapeMessage(message,'user')}
-  else bubble(message,'user');
+  input.blur();unlockAudio();input.value='';setEmotion('curious');setPhase('llm');
+  if(isLandscapeLayout())pushLandscapeMessage(message,'user');
+  else{history.replaceChildren();bubble(message,'user')}
   let streamedText='';
   let completed=null;
   if(!slowWakeNoticeUsed)slowWakeTimer=setTimeout(()=>{
@@ -717,3 +722,5 @@ window.addEventListener('beforeinstallprompt',event=>{event.preventDefault();def
 installButton.addEventListener('click',async()=>{if(!deferredInstall)return;deferredInstall.prompt();await deferredInstall.userChoice;deferredInstall=null;installButton.hidden=true});
 
 function blink(){avatar.classList.add('blink');setTimeout(()=>avatar.classList.remove('blink'),130);setTimeout(blink,2400+Math.random()*4200)}setTimeout(blink,1800);
+ensureLandscapeObserver();
+window.addEventListener('resize',ensureLandscapeObserver);
