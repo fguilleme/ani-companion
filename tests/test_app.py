@@ -1,5 +1,9 @@
+import asyncio
+import io
 import json
+import os
 import unittest
+import wave
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -60,6 +64,11 @@ class AniCompanionTests(unittest.TestCase):
         self.assertIn('session-123', command)
         self.assertEqual(command[-1], '-')
 
+    def test_build_hermes_command_always_uses_local_ani_gemma(self):
+        command = build_hermes_command('session-123')
+        self.assertEqual(command[command.index('--model') + 1], 'ani-gemma4:latest')
+        self.assertEqual(command[command.index('--provider') + 1], 'custom')
+
     def test_voice_settings_change_with_emotion(self):
         happy = voice_settings('happy')
         sad = voice_settings('sad')
@@ -72,20 +81,148 @@ class AniCompanionTests(unittest.TestCase):
         )
         self.assertEqual(spoken, 'Bonjour François. Je suis là.')
 
-    def test_extract_tts_instructions_keeps_bracketed_emotions(self):
-        instructions = app_module.extract_tts_instructions(
-            '[sourit doucement] Bonjour François. [petit rire] Je suis là.'
+    def test_tts_does_not_forward_bracketed_cues_as_voice_instructions(self):
+        text = ' '.join(
+            f'[indication expressive numéro {index}] phrase {index}.'
+            for index in range(40)
         )
-        self.assertEqual(
-            instructions,
-            'Interprète naturellement les indications suivantes sans les prononcer : sourit doucement ; petit rire.',
-        )
+        response = TestClient(app).post('/api/tts/plan', json={
+            'text': text,
+            'emotion': 'happy',
+            'turn_id': 7,
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['instructions'], '')
 
-    def test_prepare_spoken_text_normalizes_ellipses_and_removes_emoji(self):
+    def test_reply_metadata_separates_text_emotion_and_actions(self):
+        presentation = app_module.build_reply_presentation(
+            '(French) [sourit] Bonjour François. [danse] [danse]'
+        )
+        self.assertEqual(presentation, {
+            'reply': 'Bonjour François.',
+            'speech': 'Bonjour François.',
+            'emotion': 'happy',
+            'actions': [{'name': 'dance'}],
+        })
+
+    def test_prepare_spoken_text_turns_ellipses_into_non_terminal_pauses(self):
         spoken = app_module.prepare_spoken_text(
             'Oh… attends... je termine cette phrase. 💙'
         )
-        self.assertEqual(spoken, 'Oh. attends. je termine cette phrase.')
+        self.assertEqual(spoken, 'Oh, attends, je termine cette phrase.')
+
+    def test_prepare_spoken_text_replaces_long_dashes_that_silence_qwen(self):
+        spoken = app_module.prepare_spoken_text(
+            'Oui, teste tranquillement — je suis là et je t’écoute.'
+        )
+        self.assertEqual(spoken, 'Oui, teste tranquillement. je suis là et je t’écoute.')
+
+    def test_streaming_prompt_limits_first_sentence_for_fast_tts_start(self):
+        prompt = app_module.build_streaming_prompt('Raconte-moi quelque chose.')
+        self.assertTrue(prompt.startswith('Raconte-moi quelque chose.'))
+        self.assertIn('première phrase à environ dix mots maximum', prompt)
+        self.assertIn('sans points de suspension', prompt)
+
+    def test_tts_timing_logs_include_attempt_audio_metrics_and_ellipsis_text(self):
+        source = (ROOT / 'app.py').read_text()
+        for marker in (
+            'tts.request',
+            'tts.attempt.start',
+            'tts.attempt.done',
+            'tts.ready',
+            'duration_ms',
+            'rms',
+            'raw_text=%r',
+            'spoken_text=%r',
+        ):
+            self.assertIn(marker, source)
+
+    def test_browser_reports_queue_fetch_and_playback_timings_to_server(self):
+        script = (ROOT / 'static' / 'app.js').read_text()
+        self.assertIn("fetch('/api/audio/timing'", script)
+        for event in (
+            'speech.queued',
+            'tts.fetch.start',
+            'tts.fetch.done',
+            'audio.play.request',
+            'audio.play.started',
+            'audio.play.ended',
+        ):
+            self.assertIn(event, script)
+
+    def test_timing_logger_is_enabled_at_info_level_in_service(self):
+        self.assertTrue(app_module.logger.isEnabledFor(app_module.logging.INFO))
+        self.assertTrue(app_module.logger.handlers)
+
+    def test_audio_timing_endpoint_writes_client_measurements_to_journal(self):
+        with self.assertLogs('ani-companion', level='INFO') as captured:
+            response = TestClient(app).post('/api/audio/timing', json={
+                'event': 'audio.play.started',
+                'turn_key': 'server-secret-key',
+                'chunk_seq': 3,
+                'elapsed_ms': 1234.5,
+                'duration_ms': 842.2,
+                'text': 'Oh… attends...',
+            })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {'logged': True})
+        log = '\n'.join(captured.output)
+        self.assertIn('[ANI-TIMING]', log)
+        self.assertIn('audio.play.started', log)
+        self.assertIn('chunk=3', log)
+        self.assertIn("text='Oh… attends...'", log)
+
+    def test_wav_metrics_expose_leading_trailing_and_longest_silence(self):
+        output = io.BytesIO()
+        with wave.open(output, 'wb') as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(1000)
+            frames = (
+                (0).to_bytes(2, 'little', signed=True) * 200
+                + (1200).to_bytes(2, 'little', signed=True) * 300
+                + (0).to_bytes(2, 'little', signed=True) * 100
+            )
+            wav.writeframes(frames)
+        metrics = app_module._wav_metrics(output.getvalue())
+        self.assertAlmostEqual(metrics['duration_ms'], 600, delta=1)
+        self.assertAlmostEqual(metrics['leading_silence_ms'], 200, delta=20)
+        self.assertAlmostEqual(metrics['trailing_silence_ms'], 100, delta=20)
+        self.assertAlmostEqual(metrics['longest_silence_ms'], 200, delta=20)
+
+    def test_qwen_audio_retries_a_silent_wav_chunk(self):
+        def wav_with_sample(sample: int) -> bytes:
+            output = io.BytesIO()
+            with wave.open(output, 'wb') as wav:
+                wav.setnchannels(1)
+                wav.setsampwidth(2)
+                wav.setframerate(24000)
+                wav.writeframes(sample.to_bytes(2, 'little', signed=True) * 2400)
+            return output.getvalue()
+
+        silent = wav_with_sample(0)
+        audible = wav_with_sample(1200)
+        responses = [silent, audible]
+
+        class FakeClient:
+            calls = 0
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_):
+                return None
+
+            async def post(self, *_args, **_kwargs):
+                content = responses[self.calls]
+                self.calls += 1
+                FakeClient.calls = self.calls
+                return MagicMock(content=content, raise_for_status=MagicMock())
+
+        with patch.object(app_module.httpx, 'AsyncClient', return_value=FakeClient()):
+            result = asyncio.run(app_module._fetch_qwen_audio_async('Je suis là et je t’écoute.'))
+        self.assertEqual(result, audible)
+        self.assertEqual(FakeClient.calls, 2)
 
     def test_qwen_tts_request_uses_local_server_and_french_voice(self):
         request = build_qwen_tts_request('Bonjour François.', 'Parle avec joie.')
@@ -96,6 +233,8 @@ class AniCompanionTests(unittest.TestCase):
         self.assertEqual(payload['input'], 'Bonjour François.')
         self.assertEqual(payload['instructions'], 'Parle avec joie.')
         self.assertEqual(payload['response_format'], 'wav')
+        self.assertNotIn('temperature', payload)
+        self.assertNotIn('top_p', payload)
         self.assertNotIn('force_chunking', payload)
         self.assertNotIn('one_sentence_per_chunk', payload)
 
@@ -111,25 +250,257 @@ class AniCompanionTests(unittest.TestCase):
             'Deuxième phrase suffisamment longue.',
         ])
 
-    def test_pwa_prefetches_only_the_next_audio_chunk_during_playback(self):
+    def test_pwa_prefetches_only_one_streamed_audio_chunk(self):
         script = (ROOT / 'static' / 'app.js').read_text()
-        self.assertIn("fetch('/api/tts/plan'", script)
-        self.assertIn('pendingAudio=fetchAudioChunk(chunks[0]', script)
-        self.assertIn('pendingAudio=fetchAudioChunk(chunks[index+1]', script)
+        self.assertIn('let pendingAudio=null', script)
+        self.assertIn('if(cancelled||pendingAudio||!queue.length)return', script)
+        self.assertIn("promise:fetchAudioChunk(item.text,item.emotion,'',turnId,item.chunkSeq)", script)
+        self.assertIn('pendingAudio=null;\n      ensurePrefetch();', script)
+
+    def test_pwa_starts_a_fresh_session_after_context_migration(self):
+        script = (ROOT / 'static' / 'app.js').read_text()
+        self.assertIn("const SESSION_GENERATION='2'", script)
+        self.assertIn("localStorage.getItem('ani.session.generation')", script)
+        self.assertIn("localStorage.removeItem('ani.session')", script)
+        self.assertIn("localStorage.setItem('ani.session.generation',SESSION_GENERATION)", script)
+
+    def test_failed_streaming_audio_chunk_is_skipped_without_stopping_later_chunks(self):
+        script = (ROOT / 'static' / 'app.js').read_text()
+        run_start = script.index('const run=async()=>{')
+        run_block = script[run_start:run_start + 900]
+        self.assertIn('catch(error)', run_block)
+        self.assertIn("reportAudioTiming('tts.fetch.skipped'", run_block)
+        self.assertIn('pendingAudio=null;', run_block)
+        self.assertIn('ensurePrefetch();', run_block)
+        self.assertIn('continue;', run_block)
+
+    def test_pwa_uses_structured_reply_metadata(self):
+        script = (ROOT / 'static' / 'app.js').read_text()
+        self.assertIn('completed.actions', script)
+        self.assertIn('setEmotion(completed.emotion)', script)
+        self.assertIn('activeAssistantBubble.textContent=completed.reply', script)
+        self.assertNotIn('motionForText(completed.reply)', script)
+
+    def test_pwa_streams_reply_and_starts_sentence_audio_before_completion(self):
+        script = (ROOT / 'static' / 'app.js').read_text()
+        self.assertIn("fetch('/api/chat/stream'", script)
+        self.assertIn('response.body.getReader()', script)
+        self.assertIn("event.type==='delta'", script)
+        self.assertIn("event.type==='speech'", script)
+        self.assertIn('streamingSpeech?.push(event.text,event.emotion)', script)
         self.assertLess(
-            script.index('pendingAudio=fetchAudioChunk(chunks[index+1]'),
-            script.index('await player.play()', script.index('pendingAudio=fetchAudioChunk(chunks[index+1]')),
+            script.index("event.type==='speech'"),
+            script.index("event.type==='complete'"),
         )
 
-    def test_chat_rejects_empty_message(self):
-        client = TestClient(app)
-        response = client.post('/api/chat', json={'message': ''})
-        self.assertEqual(response.status_code, 422)
+    def test_disabling_voice_cancels_streaming_audio_queue(self):
+        script = (ROOT / 'static' / 'app.js').read_text()
+        self.assertIn("if(!voiceEnabled){streamingSpeech?.cancel();player.pause()}", script)
 
-    def test_chat_timeout_allows_slow_local_model_to_finish(self):
-        self.assertGreaterEqual(app_module.CHAT_TIMEOUT_SECONDS, 300)
+    def test_stream_failure_stops_current_audio_and_lip_sync(self):
+        script = (ROOT / 'static' / 'app.js').read_text()
+        catch_start = script.index('streamingSpeech?.cancel();streamingSpeech=null;', script.index('form.addEventListener'))
+        catch_block = script[catch_start:catch_start + 320]
+        self.assertIn('player.pause()', catch_block)
+        self.assertIn('stopLipSync()', catch_block)
+        self.assertIn('hideSpeech()', catch_block)
+
+    def test_pwa_displays_stream_error_message(self):
+        script = (ROOT / 'static' / 'app.js').read_text()
+        self.assertIn("throw new Error(event.message||'Ani ne répond pas')", script)
+
+    def test_chat_stream_emits_text_and_speech_before_completion(self):
+        class FakeStdin:
+            def __init__(self):
+                self.writes = []
+
+            def write(self, data):
+                self.writes.append(data)
+
+            async def drain(self):
+                return None
+
+            def close(self):
+                return None
+
+        class FakeProcess:
+            def __init__(self):
+                self.stdin = FakeStdin()
+                self.stdout = asyncio.StreamReader()
+                self.stderr = asyncio.StreamReader()
+                self.returncode = 0
+                messages = [
+                    {'jsonrpc': '2.0', 'method': 'event', 'params': {'type': 'gateway.ready'}},
+                    {'jsonrpc': '2.0', 'id': '1', 'result': {
+                        'session_id': 'runtime-1',
+                        'stored_session_id': 'stored-1',
+                    }},
+                    {'jsonrpc': '2.0', 'id': '2', 'result': {'scope': 'session', 'value': 'ani-gemma4:latest'}},
+                    {'jsonrpc': '2.0', 'method': 'event', 'params': {
+                        'type': 'message.delta',
+                        'session_id': 'runtime-1',
+                        'payload': {'text': '(French) Bonjour François, je suis bien là. '},
+                    }},
+                    {'jsonrpc': '2.0', 'id': '3', 'result': {'status': 'streaming'}},
+                    {'jsonrpc': '2.0', 'method': 'event', 'params': {
+                        'type': 'message.delta',
+                        'session_id': 'runtime-1',
+                        'payload': {'text': 'Deuxième phrase'},
+                    }},
+                    {'jsonrpc': '2.0', 'method': 'event', 'params': {
+                        'type': 'message.complete',
+                        'session_id': 'runtime-1',
+                        'payload': {'text': '(French) Bonjour François, je suis bien là. Deuxième phrase complète.'},
+                    }},
+                ]
+                for message in messages:
+                    self.stdout.feed_data((json.dumps(message) + '\n').encode())
+                self.stdout.feed_eof()
+                self.stderr.feed_eof()
+
+            async def wait(self):
+                return self.returncode
+
+        fake_process = FakeProcess()
+        with patch.object(
+            app_module.asyncio,
+            'create_subprocess_exec',
+            new=AsyncMock(return_value=fake_process),
+        ) as create_process:
+            response = TestClient(app).post('/api/chat/stream', json={
+                'message': 'Dis deux phrases.',
+                'session_id': 'stored-1',
+                'turn_id': 91,
+            })
+
+        self.assertEqual(response.status_code, 200)
+        events = [json.loads(line) for line in response.text.splitlines()]
+        event_types = [event['type'] for event in events]
+        self.assertEqual(event_types, ['start', 'delta', 'speech', 'delta', 'delta', 'speech', 'complete'])
+        self.assertLess(event_types.index('speech'), event_types.index('complete'))
+        self.assertEqual(events[0]['session_id'], 'stored-1')
+        self.assertEqual(events[2]['text'], 'Bonjour François, je suis bien là.')
+        self.assertEqual(events[4]['text'], ' complète.')
+        self.assertEqual(events[5]['text'], 'Deuxième phrase complète.')
+        self.assertEqual(events[-1]['reply'], 'Bonjour François, je suis bien là. Deuxième phrase complète.')
+        process_call = create_process.await_args_list[0]
+        process_env = process_call.kwargs['env']
+        self.assertEqual(process_call.kwargs['cwd'], app_module.HERMES_HOME)
+        self.assertTrue(process_call.kwargs['start_new_session'])
+        self.assertIn(app_module.HERMES_AGENT_ROOT, process_env['PYTHONPATH'].split(os.pathsep))
+        self.assertEqual(process_env['HERMES_MODEL'], 'ani-gemma4:latest')
+        self.assertEqual(process_env['HERMES_INFERENCE_PROVIDER'], 'custom')
+        self.assertEqual(process_env['HERMES_TUI_TOOLSETS'], 'memory')
+        requests = [json.loads(raw) for raw in fake_process.stdin.writes]
+        self.assertEqual(requests[0]['method'], 'session.resume')
+        self.assertEqual(requests[0]['params']['session_id'], 'stored-1')
+        self.assertEqual(requests[1]['method'], 'config.set')
+        self.assertEqual(requests[1]['params']['session_id'], 'runtime-1')
+        self.assertEqual(requests[1]['params']['value'], 'ani-gemma4:latest --provider custom --session')
+        self.assertEqual(requests[2]['method'], 'prompt.submit')
+        self.assertEqual(requests[2]['params']['text'], app_module.build_streaming_prompt('Dis deux phrases.'))
+
+    def test_gateway_stderr_drain_keeps_only_a_bounded_tail(self):
+        async def scenario():
+            stream = asyncio.StreamReader()
+            stream.feed_data(b'a' * 20000 + b'end')
+            stream.feed_eof()
+            return await app_module._drain_gateway_stderr(stream, max_bytes=1024)
+
+        tail = asyncio.run(scenario())
+        self.assertEqual(len(tail), 1024)
+        self.assertTrue(tail.endswith(b'end'))
+
+    def test_gateway_complete_error_is_not_treated_as_assistant_text(self):
+        with self.assertRaisesRegex(RuntimeError, 'provider-private-detail'):
+            app_module.raise_for_gateway_completion({
+                'status': 'error',
+                'text': 'Error: provider-private-detail',
+                'error': 'provider-private-detail',
+            })
+        app_module.raise_for_gateway_completion({'status': 'complete', 'text': 'Bonjour.'})
+
+    def test_stream_errors_do_not_expose_gateway_exception_details(self):
         source = (ROOT / 'app.py').read_text()
-        self.assertIn('timeout=CHAT_TIMEOUT_SECONDS', source)
+        self.assertNotIn("message=f'Réponse Hermes indisponible: {str(exc)", source)
+        self.assertIn("message='La réponse locale d’Ani a échoué.'", source)
+        self.assertIn("logger.exception('Hermes streaming failed')", source)
+
+    def test_gateway_deadline_is_not_reset_by_malformed_output(self):
+        class NoisyStdout:
+            async def readline(self):
+                await asyncio.sleep(0.002)
+                return b'not-json\n'
+
+        async def read_until_deadline():
+            process = MagicMock(stdout=NoisyStdout())
+            deadline = asyncio.get_running_loop().time() + 0.02
+            await app_module._read_gateway_message(process, deadline)
+
+        with self.assertRaises(asyncio.TimeoutError):
+            asyncio.run(read_until_deadline())
+
+    def test_chat_stream_has_an_absolute_generation_timeout(self):
+        class NoisyStdout:
+            def __init__(self):
+                self.lines = [
+                    {'jsonrpc': '2.0', 'method': 'event', 'params': {'type': 'gateway.ready', 'payload': {}}},
+                    {'jsonrpc': '2.0', 'id': '1', 'result': {'session_id': 'runtime-timeout', 'stored_session_id': 'stored-timeout'}},
+                    {'jsonrpc': '2.0', 'id': '2', 'result': {'status': 'streaming'}},
+                ]
+
+            async def readline(self):
+                if self.lines:
+                    return (json.dumps(self.lines.pop(0)) + '\n').encode()
+                await asyncio.sleep(0.002)
+                return b'{"jsonrpc":"2.0","method":"event","params":{"type":"session.stats","payload":{}}}\n'
+
+        class FakeStdin:
+            def write(self, _data):
+                return None
+
+            async def drain(self):
+                return None
+
+            def close(self):
+                return None
+
+        class FakeProcess:
+            def __init__(self):
+                self.stdin = FakeStdin()
+                self.stdout = NoisyStdout()
+                self.stderr = asyncio.StreamReader()
+                self.stderr.feed_eof()
+                self.returncode = 0
+
+            async def wait(self):
+                return 0
+
+        async def create_process(*_args, **_kwargs):
+            return FakeProcess()
+
+        with (
+            patch('app.asyncio.create_subprocess_exec', side_effect=create_process),
+            patch('app.CHAT_TIMEOUT_SECONDS', 0.02),
+        ):
+            response = TestClient(app).post(
+                '/api/chat/stream',
+                json={'message': 'Continue à travailler', 'turn_id': 9091},
+            )
+
+        events = [json.loads(line) for line in response.text.splitlines()]
+        self.assertEqual(events[-1]['type'], 'error')
+        self.assertIn('délai', events[-1]['message'])
+
+    def test_legacy_non_streaming_chat_route_is_not_exposed(self):
+        client = TestClient(app)
+        response = client.post('/api/chat', json={'message': 'test'})
+        self.assertEqual(response.status_code, 405)
+
+    def test_chat_timeout_allows_very_slow_local_model_to_finish(self):
+        self.assertGreaterEqual(app_module.CHAT_TIMEOUT_SECONDS, 900)
+        source = (ROOT / 'app.py').read_text()
+        self.assertIn('deadline = asyncio.get_running_loop().time() + CHAT_TIMEOUT_SECONDS', source)
 
     def test_hidden_state_cannot_be_overridden_by_component_display(self):
         css = (ROOT / 'static' / 'style.css').read_text()
@@ -222,24 +593,46 @@ class AniCompanionTests(unittest.TestCase):
         self.assertIn('player.pause()', script)
         self.assertIn('cancelActiveAniTurn({removeBubble:true})', script)
         self.assertIn("fetch('/api/cancel'", script)
-        self.assertIn('turn_id:turnId', script)
+        self.assertIn("fetch('/api/tts/cancel'", script)
+        self.assertIn('setTurnKey(activeTurnKey)', script)
+        self.assertIn('turn_key:activeTurnKey', script)
 
-    def test_cancel_endpoint_stops_active_hermes_process(self):
+    def test_cancel_endpoint_requires_the_server_turn_key(self):
         process = MagicMock()
         process.returncode = None
         process.wait = AsyncMock(return_value=0)
-        app_module.ACTIVE_CHAT_PROCESSES[42] = process
-        response = TestClient(app).post('/api/cancel', json={'turn_id': 42})
+        app_module.ACTIVE_CHAT_PROCESSES['server-secret-key'] = process
+
+        wrong = TestClient(app).post('/api/cancel', json={'turn_key': 'wrong-client-key'})
+        self.assertEqual(wrong.status_code, 200)
+        self.assertEqual(wrong.json(), {'cancelled': False})
+        process.terminate.assert_not_called()
+
+        response = TestClient(app).post('/api/cancel', json={'turn_key': 'server-secret-key'})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {'cancelled': True})
         process.terminate.assert_called_once_with()
         process.wait.assert_awaited_once_with()
-        self.assertNotIn(42, app_module.ACTIVE_CHAT_PROCESSES)
+        self.assertNotIn('server-secret-key', app_module.ACTIVE_CHAT_PROCESSES)
+
+    def test_tts_can_be_cancelled_without_stopping_chat(self):
+        async def scenario():
+            task = asyncio.create_task(asyncio.sleep(60))
+            app_module.ACTIVE_TTS_TASKS['server-tts-secret'] = task
+            response = await app_module.cancel_tts(
+                app_module.CancelRequest(turn_key='server-tts-secret')
+            )
+            return response, task.cancelled()
+
+        response, cancelled = asyncio.run(scenario())
+        self.assertEqual(response, {'cancelled': True})
+        self.assertTrue(cancelled)
+        self.assertNotIn('server-tts-secret', app_module.ACTIVE_TTS_TASKS)
 
     def test_tts_request_is_registered_for_turn_cancellation(self):
         source = (ROOT / 'app.py').read_text()
         self.assertIn('ACTIVE_TTS_TASKS', source)
-        self.assertIn('turn_id: int', source)
+        self.assertIn('turn_key: str | None', source)
         self.assertIn('audio_task.cancel()', source)
         self.assertIn('_fetch_qwen_audio_async', source)
 
@@ -294,7 +687,8 @@ class AniCompanionTests(unittest.TestCase):
     def test_assistant_reply_uses_ticker_and_expandable_imessage_bubble(self):
         script = (ROOT / 'static' / 'app.js').read_text()
         css = (ROOT / 'static' / 'style.css').read_text()
-        self.assertIn("bubble(data.reply,'ani',{collapsible:true})", script)
+        self.assertIn("bubble(completed.reply,'ani',{collapsible:true})", script)
+        self.assertIn("bubble(display,'ani',{collapsible:true})", script)
         self.assertIn("el.setAttribute('aria-expanded','false')", script)
         self.assertIn("el.classList.toggle('expanded')", script)
         self.assertIn("ticker.className='speech-line'", script)
@@ -310,9 +704,11 @@ class AniCompanionTests(unittest.TestCase):
 
     def test_ticker_starts_with_audio_playback_and_uses_wav_duration(self):
         script = (ROOT / 'static' / 'app.js').read_text()
-        self.assertNotIn('setEmotion(data.emotion);showSpeech(data.reply)', script)
+        self.assertIn('async function playAudioChunk(item,turnId)', script)
         self.assertIn('await player.play();', script)
-        self.assertIn('if(turnId!==activeTurnId){player.pause();return}\n    showSpeech(chunks[index],player.duration);', script)
+        play_start = script.index('async function playAudioChunk(item,turnId)')
+        play_block = script[play_start:play_start + 1500]
+        self.assertLess(play_block.index('if(turnId!==activeTurnId){player.pause();return false}'), play_block.index('showSpeech(item.text,player.duration);'))
         self.assertIn('durationSeconds*1000', script)
 
     def test_local_stt_endpoint_returns_whisper_transcript(self):
@@ -329,7 +725,7 @@ class AniCompanionTests(unittest.TestCase):
 
     def test_service_worker_precaches_avatar_runtime(self):
         worker = (ROOT / 'static' / 'sw.js').read_text()
-        self.assertIn("const CACHE='ani-companion-v15'", worker)
+        self.assertIn("const CACHE='ani-companion-v23'", worker)
         self.assertIn("'/avatar-3d.bundle.js'", worker)
 
     def test_service_worker_activates_pipeline_update_immediately(self):

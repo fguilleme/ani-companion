@@ -7,7 +7,8 @@
   "scripts": {
     "build": "esbuild src/avatar-3d.js --bundle --format=iife --target=es2020 --minify --outfile=static/avatar-3d.bundle.js",
     "test": "/home/francois/.hermes/hermes-agent/venv/bin/python -m unittest discover -s tests -v && node --check static/app.js && node --check src/avatar-3d.js",
-    "test:browser": "node tests/browser-avatar.mjs"
+    "test:browser": "node tests/browser-avatar.mjs",
+    "test:browser:streaming": "node tests/browser-streaming.mjs"
   },
   "dependencies": {
     "@pixiv/three-vrm": "^3.5.5",
