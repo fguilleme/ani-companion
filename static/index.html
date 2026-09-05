@@ -11,10 +11,19 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icons/ani-192.png" type="image/png">
   <link rel="apple-touch-icon" href="/icons/ani-192.png">
-  <link rel="stylesheet" href="/style.css?v=30">
+  <link rel="stylesheet" href="/style.css?v=31">
 </head>
 <body>
   <main class="companion-shell">
+    <div id="profile-picker" class="profile-picker" hidden>
+      <div class="profile-picker-card">
+        <strong>Qui parle à Ani ?</strong>
+        <div class="profile-picker-actions">
+          <button type="button" data-profile="francois">François</button>
+          <button type="button" data-profile="salome">Salomé</button>
+        </div>
+      </div>
+    </div>
     <section class="stage" aria-label="Ani, compagnon animé">
       <div class="atmosphere" aria-hidden="true"><span></span><span></span><span></span></div>
       <header class="topbar">
@@ -56,7 +65,7 @@
   <audio id="voice-player" preload="none"></audio>
   <audio id="status-player" preload="none"></audio>
   <script src="/avatar-3d.bundle.js" defer></script>
-  <script src="/app.js?v=30" defer></script>
+  <script src="/app.js?v=31" defer></script>
   <script>if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js'))</script>
 </body>
 </html>

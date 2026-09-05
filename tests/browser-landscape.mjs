@@ -30,6 +30,7 @@ try {
     await route.fulfill({ status: 200, contentType: 'audio/wav', body: silentWav() });
   });
   await page.addInitScript(() => {
+    localStorage.setItem('ani.profile', 'francois');
     localStorage.setItem('ani.voice', 'off');
     localStorage.setItem('ani.microphone', 'off');
     window.__chatEvents = [];

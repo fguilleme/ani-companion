@@ -32,11 +32,12 @@ try {
     await route.fulfill({ status: 200, contentType: 'audio/wav', body: silentWav() });
   });
   await page.addInitScript(() => {
+    localStorage.setItem('ani.profile', 'francois');
     localStorage.setItem('ani.voice', 'on');
     localStorage.setItem('ani.microphone', 'off');
     localStorage.setItem('ani.session.generation', '2');
-    localStorage.setItem('ani.session', 'bloated-session');
-    localStorage.setItem('ani.session.turns', '12');
+    localStorage.setItem('ani.session.francois', 'bloated-session');
+    localStorage.setItem('ani.session.turns.francois', '12');
     window.__chatSessionIds = [];
     const nativeFetch = window.fetch.bind(window);
     window.fetch = async (input, init = {}) => {
@@ -111,7 +112,7 @@ try {
   await page.waitForFunction(() => document.querySelector('#phase-indicator').dataset.phase === 'idle');
   const lifecycle = await page.evaluate(() => ({
     firstSessionId: window.__chatSessionIds[0],
-    turns: localStorage.getItem('ani.session.turns'),
+    turns: localStorage.getItem('ani.session.turns.francois'),
   }));
   if (lifecycle.firstSessionId !== null || lifecycle.turns !== '1') fail(`Le contexte ancien n'a pas été renouvelé: ${JSON.stringify(lifecycle)}`);
   ttsTexts.length = 0;

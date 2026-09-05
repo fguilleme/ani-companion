@@ -31,6 +31,11 @@ HERMES_BIN = os.getenv('HERMES_BIN', '/home/francois/.hermes/hermes-agent/venv/b
 HERMES_PYTHON = os.getenv('HERMES_PYTHON', str(Path(HERMES_BIN).with_name('python')))
 HERMES_AGENT_ROOT = os.getenv('HERMES_AGENT_ROOT', str(Path(HERMES_BIN).resolve().parents[2]))
 HERMES_HOME = os.getenv('HERMES_HOME', '/home/francois/.hermes/profiles/ani')
+HERMES_PROFILES = {
+    'francois': os.getenv('ANI_HERMES_HOME_FRANCOIS', '/home/francois/.hermes/profiles/ani'),
+    'salome': os.getenv('ANI_HERMES_HOME_SALOME', '/home/francois/.hermes/profiles/ani-salome'),
+}
+DEFAULT_PROFILE = 'francois'
 HERMES_MODEL = os.getenv('ANI_HERMES_MODEL', 'ani-gemma4:latest')
 HERMES_PROVIDER = os.getenv('ANI_HERMES_PROVIDER', 'custom')
 HERMES_TUI_TOOLSETS = os.getenv('ANI_HERMES_TOOLSETS', 'memory')
@@ -58,6 +63,7 @@ class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=12000)
     session_id: str | None = Field(default=None, max_length=160)
     turn_id: int = Field(default=0, ge=0)
+    profile: str = Field(default=DEFAULT_PROFILE, max_length=32)
 
 
 class CancelRequest(BaseModel):
@@ -562,6 +568,7 @@ async def stream_chat_events(payload: ChatRequest, turn_key: str):
     notifications: deque[dict] = deque()
     compression_active = False
     deadline = asyncio.get_running_loop().time() + CHAT_TIMEOUT_SECONDS
+    profile_home = HERMES_PROFILES.get(payload.profile, HERMES_PROFILES[DEFAULT_PROFILE])
     try:
         async with _semaphore_before_deadline(RUN_SEMAPHORE, deadline):
             process = await asyncio.wait_for(
@@ -570,14 +577,14 @@ async def stream_chat_events(payload: ChatRequest, turn_key: str):
                     '-u',
                     '-m',
                     'tui_gateway.entry',
-                    cwd=HERMES_HOME,
+                    cwd=profile_home,
                     stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     start_new_session=True,
                     env={
                         **os.environ,
-                        'HERMES_HOME': HERMES_HOME,
+                        'HERMES_HOME': profile_home,
                         'HERMES_MODEL': HERMES_MODEL,
                         'HERMES_INFERENCE_PROVIDER': HERMES_PROVIDER,
                         'HERMES_TUI_TOOLSETS': HERMES_TUI_TOOLSETS,
@@ -743,6 +750,8 @@ async def chat_stream(payload: ChatRequest):
         raise HTTPException(status_code=422, detail='Le message est vide.')
     if payload.session_id and not SESSION_RE.fullmatch(payload.session_id):
         raise HTTPException(status_code=422, detail='Invalid session id')
+    if payload.profile not in HERMES_PROFILES:
+        raise HTTPException(status_code=422, detail='Profil inconnu.')
     payload.message = message
     turn_key = secrets.token_urlsafe(24)
     return StreamingResponse(

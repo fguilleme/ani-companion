@@ -9,11 +9,13 @@ const contextMeter=document.getElementById('context-meter');
 const contextMeterFill=contextMeter?.querySelector('.context-meter-fill');
 const micButton=document.getElementById('mic-button');
 const installButton=document.getElementById('install-button');
+const profilePicker=document.getElementById('profile-picker');
 const phaseIndicator=document.getElementById('phase-indicator');
 const phaseLabel=phaseIndicator.querySelector('.phase-label');
 const phaseTime=phaseIndicator.querySelector('time');
 const SESSION_GENERATION='4';
 const MAX_SESSION_TURNS=12;
+let currentProfile=localStorage.getItem('ani.profile')||'';
 if(localStorage.getItem('ani.session.generation')!==SESSION_GENERATION){
 localStorage.removeItem('ani.session');
 localStorage.removeItem('ani.session.turns');
@@ -152,7 +154,7 @@ function updateContextMeter(used,max){
   else contextMeterFill.style.background='var(--accent)';
 }
 function estimateContextTokens(){
-  const turns=Math.max(0,Number.parseInt(localStorage.getItem('ani.session.turns')||'0',10)||0);
+  const turns=Math.max(0,Number.parseInt(localStorage.getItem(`ani.session.turns.${currentProfile}`)||'0',10)||0);
   const baseTokens=3000;
   const tokensPerTurn=1200;
   return Math.min(contextTokensMax,baseTokens+turns*tokensPerTurn);
@@ -424,11 +426,13 @@ function streamingDisplayText(text){
     .trim();
 }
 function sessionForNextTurn(){
-  let sessionId=localStorage.getItem('ani.session');
-  let turns=Math.max(0,Number.parseInt(localStorage.getItem('ani.session.turns')||'0',10)||0);
+  const sessionKey=`ani.session.${currentProfile}`;
+  const turnsKey=`ani.session.turns.${currentProfile}`;
+  let sessionId=localStorage.getItem(sessionKey);
+  let turns=Math.max(0,Number.parseInt(localStorage.getItem(turnsKey)||'0',10)||0);
   if(sessionId&&turns>=MAX_SESSION_TURNS){
-    localStorage.removeItem('ani.session');
-    localStorage.removeItem('ani.session.turns');
+    localStorage.removeItem(sessionKey);
+    localStorage.removeItem(turnsKey);
     sessionId=null;turns=0;
     refreshContextMeter();
   }
@@ -447,9 +451,24 @@ function motionForText(text=''){
   if(/\[(?:taquine|tease)\]/.test(normalized))return 'tease';
   return null;
 }
+function showProfilePicker(){
+  if(!profilePicker)return;
+  profilePicker.hidden=false;
+}
+function selectProfile(profile){
+  currentProfile=profile;
+  localStorage.setItem('ani.profile',profile);
+  if(profilePicker)profilePicker.hidden=true;
+  refreshContextMeter();
+}
+profilePicker?.querySelectorAll('[data-profile]').forEach(button=>{
+  button.addEventListener('click',()=>selectProfile(button.dataset.profile));
+});
+if(!currentProfile)showProfilePicker();
 
 form.addEventListener('submit',async event=>{
   event.preventDefault();const message=input.value.trim();if(!message)return;
+  if(!currentProfile){showProfilePicker();return}
   cancelActiveAniTurn();const turnId=activeTurnId;aniTurnActive=true;
   turnTimingStarted=performance.now();lastAudioEndedAt=null;
   chatController=new AbortController();
@@ -466,15 +485,15 @@ form.addEventListener('submit',async event=>{
     }
   },6000);
   try{
-    const response=await fetch('/api/chat/stream',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message,session_id:sessionState.sessionId,turn_id:turnId}),signal:chatController.signal});
+    const response=await fetch('/api/chat/stream',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message,session_id:sessionState.sessionId,turn_id:turnId,profile:currentProfile}),signal:chatController.signal});
     if(turnId!==activeTurnId)return;
     if(!response.ok){const data=await response.json();throw new Error(data.detail||'Ani ne répond pas')}
     await readNdjson(response,async event=>{
       if(turnId!==activeTurnId)return;
       if(event.type==='start'){
         if(event.session_id){
-          localStorage.setItem('ani.session',event.session_id);
-          localStorage.setItem('ani.session.turns',String(sessionState.turnNumber));
+          localStorage.setItem(`ani.session.${currentProfile}`,event.session_id);
+          localStorage.setItem(`ani.session.turns.${currentProfile}`,String(sessionState.turnNumber));
           refreshContextMeter();
         }
         activeTurnKey=event.turn_key||null;
@@ -513,7 +532,7 @@ form.addEventListener('submit',async event=>{
     });
     if(turnId!==activeTurnId)return;
     if(!completed)throw new Error('La réponse d’Ani a été interrompue.');
-    if(completed.session_id)localStorage.setItem('ani.session',completed.session_id);
+    if(completed.session_id)localStorage.setItem(`ani.session.${currentProfile}`,completed.session_id);
     clearTimeout(slowWakeTimer);slowWakeTimer=null;setEmotion(completed.emotion);setPhase('idle');
     refreshContextMeter();
     if(!activeAssistantBubble){
