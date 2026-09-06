@@ -298,7 +298,13 @@ function makeGlbLikeVrm(gltf) {
   };
 }
 
-loadAvatar(window.__aniAvatarFile ? window.__aniAvatarFile() : 'ani.vrm');
+function currentAvatarFile(){
+  try{
+    const profile=localStorage.getItem('ani.profile')||'';
+    return localStorage.getItem(`ani.avatar.${profile}`)||'ani.vrm';
+  }catch(_){return 'ani.vrm'}
+}
+loadAvatar(currentAvatarFile());
 
 function updateBlink(elapsed) {
   if (blinkStart < 0 && elapsed >= nextBlink) blinkStart = elapsed;

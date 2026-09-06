@@ -499,16 +499,23 @@ modelSelector?.addEventListener('change',()=>{
 const avatarSelector=document.getElementById('avatar-selector');
 async function refreshAvatarSelector(){
   if(!avatarSelector)return;
-  let catalog=[];
+  let catalog=[];let personaMap={};
   try{
-    const response=await fetch('/api/avatar-models');
-    if(response.ok)catalog=(await response.json()).models||[];
+    const [modelsResponse,personaResponse]=await Promise.all([
+      fetch('/api/avatar-models'),
+      fetch(`/api/persona?profile=${encodeURIComponent(currentProfile)}`).catch(()=>null),
+    ]);
+    if(modelsResponse.ok)catalog=(await modelsResponse.json()).models||[];
+    if(personaResponse&&personaResponse.ok){
+      const data=await personaResponse.json();
+      personaMap[data.avatar]=data.display_name;
+    }
   }catch(_){catalog=[]}
   if(!catalog.length)catalog=[{id:'ani.vrm',type:'vrm',label:'ani.vrm'}];
   avatarSelector.replaceChildren(...catalog.map(model=>{
     const option=document.createElement('option');
     option.value=model.id;
-    option.textContent=model.type==='glb'?`${model.label} (animations)`:model.label;
+    option.textContent=personaMap[model.id]||model.label;
     return option;
   }));
   const saved=localStorage.getItem(`ani.avatar.${currentProfile}`)||'ani.vrm';
