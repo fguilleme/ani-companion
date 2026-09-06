@@ -232,14 +232,26 @@ function loadAvatar(file) {
     for (const { node } of Object.values(idleBones)) { node.rotation.set(0, 0, 0); }
     for (const key of Object.keys(idleBones)) delete idleBones[key];
     if (isGlb) {
-      const model = { scene: gltf.scene };
       VRMUtils.removeUnnecessaryVertices(gltf.scene);
+      tuneGlbMaterials(gltf.scene);
       glbAnimations = gltf.animations || [];
       if (glbAnimations.length) {
         mixer = new THREE.AnimationMixer(gltf.scene);
         const idleName = glbAnimations.find(clip => /idle|breath/i.test(clip.name));
         if (idleName) { glbIdleClip = idleName; mixer.clipAction(idleName).play(); }
       }
+      // No morph targets or jaw bones in this rig: approximate speech with a subtle head bob.
+      gltf.scene.traverse((object) => {
+        if (object.isBone && /head/i.test(object.name) && !/end|front/i.test(object.name)) {
+          idleBones.head = { node: object, base: object.rotation.clone() };
+        }
+        if (object.isBone && /neck/i.test(object.name)) {
+          idleBones.neck = { node: object, base: object.rotation.clone() };
+        }
+        if (object.isBone && /spine0?2|chest/i.test(object.name) && !idleBones.chest) {
+          idleBones.chest = { node: object, base: object.rotation.clone() };
+        }
+      });
       gltf.scene.updateMatrixWorld(true);
       baseAvatarPosition.copy(gltf.scene.position);
       baseAvatarRotation.copy(gltf.scene.rotation);
@@ -267,6 +279,23 @@ function loadAvatar(file) {
     console.error('Impossible de charger l’avatar', error);
     loading.textContent = 'Avatar 3D indisponible';
     loading.classList.add('error');
+  });
+}
+
+function tuneGlbMaterials(scene) {
+  // GLB exports often carry emissiveFactor=[1,1,1] + emissiveTexture and 2x specular,
+  // which washes the model out. Clamp both.
+  const visited = new Set();
+  scene.traverse((object) => {
+    const materials = Array.isArray(object.material) ? object.material : [object.material];
+    for (const material of materials) {
+      if (!material || visited.has(material)) continue;
+      visited.add(material);
+      if (material.emissive) material.emissiveIntensity = 0.25;
+      if (material.specularIntensity !== undefined) material.specularIntensity = 0.6;
+      if (material.specularColor && material.specularColor.setScalar) material.specularColor.setScalar(0.8);
+      material.needsUpdate = true;
+    }
   });
 }
 
@@ -345,11 +374,19 @@ function playMotion(name) {
 }
 
 function applySpeakingMotion(elapsed) {
-  if (mouthOpen > 0.025 && idleBones.head) {
-    idleBones.head.node.rotation.x += Math.sin(elapsed * 2.6) * 0.018;
+  const bobAmount = mouthOpen > 0.025 ? 1 : 0;
+  if (idleBones.head) {
+    idleBones.head.node.rotation.x += Math.sin(elapsed * 2.6) * 0.018 * (bobAmount ? 1.6 : 1);
     idleBones.head.node.rotation.y += Math.sin(elapsed * 1.9) * 0.025;
     idleBones.head.node.rotation.z += Math.sin(elapsed * 1.3) * 0.008;
-    if (idleBones.chest) idleBones.chest.node.rotation.y += Math.sin(elapsed * 1.5) * 0.01;
+    if (bobAmount) idleBones.head.node.rotation.x += Math.sin(elapsed * 9.4) * 0.02;
+  }
+  if (bobAmount && idleBones.neck) {
+    idleBones.neck.node.rotation.x += Math.sin(elapsed * 9.4 + 0.7) * 0.014;
+  }
+  if (bobAmount && idleBones.chest) {
+    idleBones.chest.node.rotation.x += Math.sin(elapsed * 4.7) * 0.012;
+    idleBones.chest.node.rotation.y += Math.sin(elapsed * 1.5) * 0.01;
   }
 }
 
