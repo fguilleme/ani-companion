@@ -515,6 +515,57 @@ class AniCompanionTests(unittest.TestCase):
         avatar_source = (ROOT / 'src' / 'avatar-3d.js').read_text()
         self.assertIn('preserveDrawingBuffer: true', avatar_source)
 
+    def test_avatar_models_endpoint_lists_vrm_and_glb(self):
+        client = TestClient(app)
+        response = client.get('/api/avatar-models')
+        self.assertEqual(response.status_code, 200)
+        models = response.json()['models']
+        ids = {model['id'] for model in models}
+        self.assertIn('ani.vrm', ids)
+        self.assertTrue(all(model['type'] in ('vrm', 'glb') for model in models))
+
+    def test_pwa_offers_avatar_model_dropdown(self):
+        html = (ROOT / 'static' / 'index.html').read_text()
+        script = (ROOT / 'static' / 'app.js').read_text()
+        self.assertIn('id="avatar-selector"', html)
+        self.assertIn("fetch('/api/avatar-models'", script)
+        self.assertIn('ani.avatar.${currentProfile}', script)
+
+    def test_avatar_runtime_loads_glb_with_animation_mixer(self):
+        source = (ROOT / 'src' / 'avatar-3d.js').read_text()
+        self.assertIn('AnimationMixer', source)
+        self.assertIn('glbAnimations', source)
+        self.assertIn('.glb', source)
+
+    def test_persona_config_maps_profile_to_name_avatar_voice(self):
+        persona = app_module.load_avatar_persona('francois')
+        self.assertEqual(persona['display_name'], 'Ani')
+        self.assertEqual(persona['voice'], 'Vivian')
+        fallback = app_module.load_avatar_persona('inconnu')
+        self.assertEqual(fallback['display_name'], 'Ani')
+
+    def test_persona_endpoint_returns_identity(self):
+        client = TestClient(app)
+        response = client.get('/api/persona', params={'profile': 'francois'})
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertIn('display_name', body)
+        self.assertIn('voice', body)
+        self.assertEqual(client.get('/api/persona', params={'profile': 'x'}).status_code, 422)
+
+    def test_streaming_prompt_injects_alternate_identity(self):
+        prompt = app_module.build_streaming_prompt('Salut.', 'Luna')
+        self.assertIn("tu t'appelles Luna", prompt)
+        self.assertIn('sans jamais dire Ani', prompt)
+        default_prompt = app_module.build_streaming_prompt('Salut.')
+        self.assertNotIn("tu t'appelles", default_prompt)
+
+    def test_tts_uses_persona_voice_from_config(self):
+        request = app_module.build_qwen_tts_request('Bonjour.', '', 'Vivian')
+        self.assertEqual(json.loads(request.data)['voice'], 'Vivian')
+        default_request = app_module.build_qwen_tts_request('Bonjour.')
+        self.assertEqual(default_request.full_url, 'http://127.0.0.1:15004/v1/audio/speech')
+
     def test_reply_presentation_strips_markdown_latex_and_thinking(self):
         presentation = app_module.build_reply_presentation(
             '</think>Calcul intermédiaire. **Résultat** : $\\text{H}_2\\text{SO}_4$ = $2 \\times 1.008$ + 32.06, soit **98,08 g/mol**. <br>Voilà.'
@@ -826,7 +877,7 @@ class AniCompanionTests(unittest.TestCase):
 
     def test_service_worker_precaches_avatar_runtime(self):
         worker = (ROOT / 'static' / 'sw.js').read_text()
-        self.assertIn("const CACHE='ani-companion-v39'", worker)
+        self.assertIn("const CACHE='ani-companion-v40'", worker)
         self.assertIn("'/avatar-3d.bundle.js'", worker)
 
     def test_service_worker_activates_pipeline_update_immediately(self):
@@ -839,9 +890,9 @@ class AniCompanionTests(unittest.TestCase):
         html = (ROOT / 'static' / 'index.html').read_text()
         worker = (ROOT / 'static' / 'sw.js').read_text()
         self.assertIn('href="/style.css?v=33"', html)
-        self.assertIn('src="/app.js?v=39"', html)
+        self.assertIn('src="/app.js?v=40"', html)
         self.assertIn("'/style.css?v=33'", worker)
-        self.assertIn("'/app.js?v=39'", worker)
+        self.assertIn("'/app.js?v=40'", worker)
 
     def test_phase_timer_does_not_flood_accessibility_announcements(self):
         html = (ROOT / 'static' / 'index.html').read_text()
@@ -992,7 +1043,7 @@ class AniCompanionTests(unittest.TestCase):
     def test_models_catalog_is_queried_at_startup(self):
         script = (ROOT / 'static' / 'app.js').read_text()
         self.assertIn('refreshModelSelector', script)
-        self.assertIn('else refreshModelSelector();', script)
+        self.assertIn('else{refreshModelSelector();refreshAvatarSelector()}', script)
 
 
 if __name__ == '__main__':

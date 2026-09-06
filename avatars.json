@@ -1,0 +1,12 @@
+{
+  "francois": {
+    "display_name": "Ani",
+    "avatar": "ani.glb",
+    "voice": "Vivian"
+  },
+  "salome": {
+    "display_name": "Ana",
+    "avatar": "ani.vrm",
+    "voice": "Vivian"
+  }
+}

@@ -201,27 +201,104 @@ resize();
 
 const loader = new GLTFLoader();
 loader.register((parser) => new VRMLoaderPlugin(parser));
-loader.load('/models/ani.vrm', (gltf) => {
-  vrm = gltf.userData.vrm;
-  VRMUtils.removeUnnecessaryVertices(gltf.scene);
-  VRMUtils.removeUnnecessaryJoints(gltf.scene);
-  VRMUtils.rotateVRM0(vrm);
-  baseAvatarPosition.copy(vrm.scene.position);
-  baseAvatarRotation.copy(vrm.scene.rotation);
-  tuneMaterials(vrm);
-  poseNaturally(vrm);
-  scene.add(vrm.scene);
-  frameModel(vrm);
-  setEmotion(container.className.match(/emotion-([\w-]+)/)?.[1] || 'neutral');
-  loading.hidden = true;
-  container.classList.add('avatar-ready');
-}, (event) => {
-  if (event.total) loading.textContent = `Chargement d’Ani… ${Math.round(event.loaded / event.total * 100)}%`;
-}, (error) => {
-  console.error('Impossible de charger Ani VRM', error);
-  loading.textContent = 'Avatar 3D indisponible';
-  loading.classList.add('error');
-});
+let glbAnimations = [];
+let mixer = null;
+let activeClip = null;
+let glbIdleClip = null;
+
+function playGlbClip(name, { loop = true, once = false } = {}) {
+  if (!mixer) return false;
+  const clip = glbAnimations.find(clip => clip.name.toLowerCase().includes(name.toLowerCase()));
+  if (!clip) return false;
+  const action = mixer.clipAction(clip);
+  action.reset();
+  action.setLoop(once ? THREE.LoopOnce : THREE.LoopRepeat);
+  action.clampWhenFinished = once;
+  action.play();
+  activeClip = action;
+  return true;
+}
+
+function loadAvatar(file) {
+  const safe = /^[\w][\w .()-]*\.(vrm|glb)$/i.test(file) ? file : 'ani.vrm';
+  const isGlb = safe.toLowerCase().endsWith('.glb');
+  loading.hidden = false; loading.classList.remove('error');
+  container.classList.remove('avatar-ready');
+  loader.load(`/models/${encodeURIComponent(safe)}`, (gltf) => {
+    if (vrm) { scene.remove(vrm.scene); vrm = null; }
+    if (mixer) { mixer.stopAllAction(); mixer = null; }
+    glbAnimations = [];
+    activeClip = null;
+    for (const { node } of Object.values(idleBones)) { node.rotation.set(0, 0, 0); }
+    for (const key of Object.keys(idleBones)) delete idleBones[key];
+    if (isGlb) {
+      const model = { scene: gltf.scene };
+      VRMUtils.removeUnnecessaryVertices(gltf.scene);
+      glbAnimations = gltf.animations || [];
+      if (glbAnimations.length) {
+        mixer = new THREE.AnimationMixer(gltf.scene);
+        const idleName = glbAnimations.find(clip => /idle|breath/i.test(clip.name));
+        if (idleName) { glbIdleClip = idleName; mixer.clipAction(idleName).play(); }
+      }
+      gltf.scene.updateMatrixWorld(true);
+      baseAvatarPosition.copy(gltf.scene.position);
+      baseAvatarRotation.copy(gltf.scene.rotation);
+      scene.add(gltf.scene);
+      vrm = makeGlbLikeVrm(gltf);
+      frameModel(vrm);
+    } else {
+      vrm = gltf.userData.vrm;
+      VRMUtils.removeUnnecessaryVertices(gltf.scene);
+      VRMUtils.removeUnnecessaryJoints(gltf.scene);
+      VRMUtils.rotateVRM0(vrm);
+      baseAvatarPosition.copy(vrm.scene.position);
+      baseAvatarRotation.copy(vrm.scene.rotation);
+      tuneMaterials(vrm);
+      poseNaturally(vrm);
+      scene.add(vrm.scene);
+      frameModel(vrm);
+    }
+    setEmotion(container.className.match(/emotion-([\w-]+)/)?.[1] || 'neutral');
+    loading.hidden = true;
+    container.classList.add('avatar-ready');
+  }, (event) => {
+    if (event.total) loading.textContent = `Chargement d’Ani… ${Math.round(event.loaded / event.total * 100)}%`;
+  }, (error) => {
+    console.error('Impossible de charger l’avatar', error);
+    loading.textContent = 'Avatar 3D indisponible';
+    loading.classList.add('error');
+  });
+}
+
+function makeGlbLikeVrm(gltf) {
+  // Adapt a GLB rig to the vrm-shaped API used by the render loop.
+  const bonesByName = {};
+  gltf.scene.traverse((object) => { if (object.isBone) bonesByName[object.name.toLowerCase()] = object; });
+  const pick = (...names) => {
+    for (const name of names) {
+      if (bonesByName[name]) return bonesByName[name];
+      const partial = Object.keys(bonesByName).find(key => key.includes(name.toLowerCase()));
+      if (partial) return bonesByName[partial];
+    }
+    return null;
+  };
+  const humanoid = {
+    getNormalizedBoneNode: (name) => pick(
+      name, name.toLowerCase(),
+      name.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase(),
+      name.replace(/([a-z])([A-Z])/g, '$1$2').toLowerCase(),
+    ) || null,
+  };
+  return {
+    scene: gltf.scene,
+    humanoid,
+    expressionManager: null,
+    lookAt: null,
+    update: (delta) => { if (mixer) mixer.update(delta); },
+  };
+}
+
+loadAvatar(window.__aniAvatarFile ? window.__aniAvatarFile() : 'ani.vrm');
 
 function updateBlink(elapsed) {
   if (blinkStart < 0 && elapsed >= nextBlink) blinkStart = elapsed;
@@ -246,6 +323,14 @@ function updateMouth(elapsed) {
 
 function playMotion(name) {
   if (!motionDurations[name] || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return false;
+  const clipMap = { dance: 'dance', spin: 'turn', jump: 'jump', sway: 'sway', tease: 'dance' };
+  if (glbAnimations.length && playGlbClip(clipMap[name] || name, { once: true })) {
+    activeMotion = name;
+    motionStartedAt = performance.now();
+    motionCameraActive = ['dance', 'spin', 'jump'].includes(name);
+    cameraReturning = !motionCameraActive;
+    return true;
+  }
   activeMotion = name;
   motionStartedAt = performance.now();
   motionCameraActive = ['dance', 'spin', 'jump'].includes(name);

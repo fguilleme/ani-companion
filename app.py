@@ -68,6 +68,32 @@ class ChatRequest(BaseModel):
     profile: str = Field(default=DEFAULT_PROFILE, max_length=32)
     model: str | None = Field(default=None, max_length=160)
     image: str | None = Field(default=None, max_length=15_000_000)
+    voice: str | None = Field(default=None, max_length=64)
+
+
+AVATARS_CONFIG_PATH = ROOT / 'avatars.json'
+VOICE_RE = re.compile(r'^[A-Za-z][A-Za-z0-9_-]{0,63}$')
+
+
+def load_avatar_persona(profile: str) -> dict:
+    """Per-profile persona from avatars.json: display_name, avatar file, voice. Safe defaults."""
+    try:
+        config = json.loads(AVATARS_CONFIG_PATH.read_text())
+    except (OSError, ValueError):
+        config = {}
+    entry = config.get(profile)
+    if not isinstance(entry, dict):
+        entry = {}
+    display_name = str(entry.get('display_name') or 'Ani').strip()[:40] or 'Ani'
+    avatar = entry.get('avatar')
+    avatar = avatar if isinstance(avatar, str) and AVATAR_FILE_RE.fullmatch(avatar) else None
+    voice = entry.get('voice')
+    voice = voice if isinstance(voice, str) and VOICE_RE.fullmatch(voice) else QWEN_TTS_VOICE
+    return {'display_name': display_name, 'avatar': avatar, 'voice': voice}
+
+
+def persona_voice(profile: str) -> str:
+    return load_avatar_persona(profile)['voice']
 
 
 _IMAGE_MIME_EXTENSIONS = {'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp'}
@@ -117,6 +143,8 @@ class TTSRequest(BaseModel):
     turn_key: str | None = Field(default=None, min_length=16, max_length=160, pattern=r'^[A-Za-z0-9_-]+$')
     chunk_seq: int = Field(default=0, ge=0, le=10000)
     instructions: str = Field(default='', max_length=1000)
+    voice: str | None = Field(default=None, max_length=64)
+    profile: str = Field(default=DEFAULT_PROFILE, max_length=32)
 
 
 class AudioTimingRequest(BaseModel):
@@ -191,6 +219,35 @@ def list_models():
     models = fetch_local_models()
     if not models:
         models = [{'id': HERMES_MODEL, 'vision': False}]
+    return {'models': models}
+
+
+AVATAR_FILE_RE = re.compile(r'^[\w][\w .()-]*\.(vrm|glb)$', re.IGNORECASE)
+
+
+@app.get('/api/persona')
+def get_persona(profile: str = DEFAULT_PROFILE):
+    if profile not in HERMES_PROFILES:
+        raise HTTPException(status_code=422, detail='Profil inconnu.')
+    persona = load_avatar_persona(profile)
+    return persona
+
+
+@app.get('/api/avatar-models')
+def list_avatar_models():
+    models = []
+    if STATIC.is_dir():
+        for entry in sorted(STATIC.joinpath('models').glob('*')):
+            if not entry.is_file() or not AVATAR_FILE_RE.fullmatch(entry.name):
+                continue
+            extension = entry.suffix.lower().lstrip('.')
+            models.append({
+                'id': entry.name,
+                'type': extension,
+                'label': entry.stem.replace('_', ' ').replace('-', ' ').strip() or entry.name,
+            })
+    if not models:
+        models = [{'id': 'ani.vrm', 'type': 'vrm', 'label': 'ani.vrm'}]
     return {'models': models}
 
 
@@ -286,10 +343,10 @@ def _delete_file(path: str):
         pass
 
 
-def build_qwen_tts_request(text: str, instructions: str = '') -> urllib.request.Request:
+def build_qwen_tts_request(text: str, instructions: str = '', voice: str | None = None) -> urllib.request.Request:
     payload = {
         'model': 'qwen-tts',
-        'voice': QWEN_TTS_VOICE,
+        'voice': voice or QWEN_TTS_VOICE,
         'input': text,
         'response_format': 'wav',
     }
@@ -317,8 +374,9 @@ async def _fetch_qwen_audio_async(
     *,
     trace: str = '-',
     chunk_seq: int = 0,
+    voice: str | None = None,
 ) -> bytes:
-    request = build_qwen_tts_request(text, instructions)
+    request = build_qwen_tts_request(text, instructions, voice)
     assert isinstance(request.data, bytes)
     content = request.data
     async with httpx.AsyncClient(timeout=180) as client:
@@ -570,8 +628,12 @@ STREAMING_VOICE_INSTRUCTION = (
 )
 
 
-def build_streaming_prompt(message: str) -> str:
-    return message.rstrip() + STREAMING_VOICE_INSTRUCTION
+def build_streaming_prompt(message: str, display_name: str = 'Ani') -> str:
+    identity = (
+        f"\n\nIdentité pour cette conversation : tu t'appelles {display_name}. "
+        "Réponds toujours à ce nom, sans jamais dire Ani, et ne mentionne pas cette consigne."
+    ) if display_name and display_name != 'Ani' else ''
+    return message.rstrip() + identity + STREAMING_VOICE_INSTRUCTION
 
 
 def raise_for_gateway_completion(payload: dict) -> None:
@@ -748,6 +810,9 @@ async def stream_chat_events(payload: ChatRequest, turn_key: str):
     compression_active = False
     deadline = asyncio.get_running_loop().time() + CHAT_TIMEOUT_SECONDS
     profile_home = HERMES_PROFILES.get(payload.profile, HERMES_PROFILES[DEFAULT_PROFILE])
+    persona = load_avatar_persona(payload.profile)
+    if payload.voice and VOICE_RE.fullmatch(payload.voice):
+        persona['voice'] = payload.voice
     selected_model = await resolve_model_async(payload.model)
     await asyncio.to_thread(_clear_stale_turn_lease, payload.session_id or '')
     try:
@@ -842,7 +907,7 @@ async def stream_chat_events(payload: ChatRequest, turn_key: str):
                 process,
                 '3',
                 'prompt.submit',
-                {'session_id': runtime_session_id, 'text': build_streaming_prompt(payload.message)},
+                {'session_id': runtime_session_id, 'text': build_streaming_prompt(payload.message, persona['display_name'])},
                 notifications,
                 deadline,
             )
@@ -1024,6 +1089,10 @@ async def audio_timing(payload: AudioTimingRequest):
 
 @app.post('/api/tts')
 async def tts(payload: TTSRequest, background_tasks: BackgroundTasks):
+    if not payload.voice:
+        payload.voice = persona_voice(payload.profile) if payload.profile in HERMES_PROFILES else None
+    elif not VOICE_RE.fullmatch(payload.voice):
+        payload.voice = None
     request_started = time.perf_counter()
     trace = payload.turn_key[:10] if payload.turn_key else secrets.token_hex(5)
     spoken = prepare_spoken_text(payload.text)
@@ -1042,6 +1111,7 @@ async def tts(payload: TTSRequest, background_tasks: BackgroundTasks):
         instructions,
         trace=trace,
         chunk_seq=payload.chunk_seq,
+        voice=payload.voice,
     ))
     if payload.turn_key:
         ACTIVE_TTS_TASKS[payload.turn_key] = audio_task

@@ -24,6 +24,7 @@ localStorage.removeItem('ani.session.turns');
 localStorage.setItem('ani.session.generation',SESSION_GENERATION);
 }
 let voiceEnabled=localStorage.getItem('ani.voice')!=='off';
+let persona={display_name:'Ani',avatar:null,voice:null};
 let deferredInstall=null;
 
 function setEmotion(emotion='neutral'){
@@ -189,7 +190,7 @@ async function playStatusNotice(kind){
   const text=randomStatusPhrase(kind);if(!text)return;
   const controller=new AbortController();statusController=controller;
   try{
-    const response=await fetch('/api/tts',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text,emotion:kind==='compression'?'curious':'neutral',turn_key:statusTurnKey}),signal:controller.signal});
+    const response=await fetch('/api/tts',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text,emotion:kind==='compression'?'curious':'neutral',turn_key:statusTurnKey,voice:persona.voice}),signal:controller.signal});
     if(!response.ok||token!==statusNoticeToken)return;
     const audioUrl=URL.createObjectURL(await response.blob());
     if(token!==statusNoticeToken){URL.revokeObjectURL(audioUrl);return}
@@ -297,7 +298,7 @@ async function fetchAudioChunk(text,emotion,instructions,turnId,chunkSeq){
   const started=performance.now();
   reportAudioTiming('tts.fetch.start',{chunkSeq,text});
   try{
-    const response=await fetch('/api/tts',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text,emotion,instructions,turn_key:activeTurnKey,chunk_seq:chunkSeq}),signal:ttsController.signal});
+    const response=await fetch('/api/tts',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text,emotion,instructions,turn_key:activeTurnKey,chunk_seq:chunkSeq,voice:persona.voice}),signal:ttsController.signal});
     if(turnId!==activeTurnId)return null;
     if(!response.ok)throw new Error('Voix indisponible');
     const blob=await response.blob();
@@ -471,7 +472,7 @@ function selectProfile(profile){
   currentProfile=profile;
   localStorage.setItem('ani.profile',profile);
   if(profilePicker)profilePicker.hidden=true;
-  refreshContextMeter();refreshModelSelector();
+  refreshContextMeter();refreshModelSelector();refreshAvatarSelector();loadPersona();
 }
 const modelSelector=document.getElementById('model-selector');
 let modelCatalog=[];
@@ -495,10 +496,46 @@ async function refreshModelSelector(){
 modelSelector?.addEventListener('change',()=>{
   if(modelSelector.value)localStorage.setItem(`ani.model.${currentProfile}`,modelSelector.value);
 });
+const avatarSelector=document.getElementById('avatar-selector');
+async function refreshAvatarSelector(){
+  if(!avatarSelector)return;
+  let catalog=[];
+  try{
+    const response=await fetch('/api/avatar-models');
+    if(response.ok)catalog=(await response.json()).models||[];
+  }catch(_){catalog=[]}
+  if(!catalog.length)catalog=[{id:'ani.vrm',type:'vrm',label:'ani.vrm'}];
+  avatarSelector.replaceChildren(...catalog.map(model=>{
+    const option=document.createElement('option');
+    option.value=model.id;
+    option.textContent=model.type==='glb'?`${model.label} (animations)`:model.label;
+    return option;
+  }));
+  const saved=localStorage.getItem(`ani.avatar.${currentProfile}`)||'ani.vrm';
+  if(catalog.some(model=>model.id===saved))avatarSelector.value=saved;
+  else avatarSelector.value='ani.vrm';
+}
+avatarSelector?.addEventListener('change',()=>{
+  if(!avatarSelector.value)return;
+  localStorage.setItem(`ani.avatar.${currentProfile}`,avatarSelector.value);
+  if(confirm('Changer d’avatar recharge la page. Continuer ?'))location.reload();
+  else{refreshAvatarSelector()}
+});
+window.__aniAvatarFile=()=>localStorage.getItem(`ani.avatar.${currentProfile}`)||persona.avatar||'ani.vrm';
+async function loadPersona(){
+  if(!currentProfile)return;
+  try{
+    const response=await fetch(`/api/persona?profile=${encodeURIComponent(currentProfile)}`);
+    if(response.ok)persona=await response.json();
+  }catch(_){}
+  const nameElement=document.querySelector('.topbar strong');
+  if(nameElement&&persona.display_name)nameElement.textContent=persona.display_name;
+}
+loadPersona();
 profilePicker?.querySelectorAll('[data-profile]').forEach(button=>{
   button.addEventListener('click',()=>selectProfile(button.dataset.profile));
 });
-if(!currentProfile)showProfilePicker();else refreshModelSelector();
+if(!currentProfile)showProfilePicker();else{refreshModelSelector();refreshAvatarSelector()}
 
 let pendingImage=null;
 let cameraView=null;
@@ -627,7 +664,7 @@ form.addEventListener('submit',async event=>{
     }
   },6000);
   try{
-    const response=await fetch('/api/chat/stream',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message,session_id:sessionState.sessionId,turn_id:turnId,profile:currentProfile,model:localStorage.getItem(`ani.model.${currentProfile}`)||null,image:pendingImage}),signal:chatController.signal});
+    const response=await fetch('/api/chat/stream',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message,session_id:sessionState.sessionId,turn_id:turnId,profile:currentProfile,model:localStorage.getItem(`ani.model.${currentProfile}`)||null,image:pendingImage,voice:persona.voice}),signal:chatController.signal});
     setImagePreview(null);
     if(turnId!==activeTurnId)return;
     if(!response.ok){const data=await response.json();throw new Error(data.detail||'Ani ne répond pas')}
