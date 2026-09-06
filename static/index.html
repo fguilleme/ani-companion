@@ -31,6 +31,7 @@
         <div class="top-actions">
           <select id="model-selector" class="model-selector" aria-label="Modèle d’Ani"></select>
           <select id="avatar-selector" class="model-selector" aria-label="Avatar d’Ani"></select>
+          <select id="voice-selector" class="model-selector" aria-label="Voix d’Ani"></select>
           <button id="install-button" class="install-control" type="button" hidden>Installer</button>
         </div>
       </header>
@@ -80,7 +81,7 @@
   <audio id="voice-player" preload="none"></audio>
   <audio id="status-player" preload="none"></audio>
   <script src="/avatar-3d.bundle.js" defer></script>
-  <script src="/app.js?v=41" defer></script>
+  <script src="/app.js?v=42" defer></script>
   <script>if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js'))</script>
 </body>
 </html>

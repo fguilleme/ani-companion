@@ -472,7 +472,7 @@ function selectProfile(profile){
   currentProfile=profile;
   localStorage.setItem('ani.profile',profile);
   if(profilePicker)profilePicker.hidden=true;
-  refreshContextMeter();refreshModelSelector();refreshAvatarSelector();loadPersona();
+  refreshContextMeter();refreshModelSelector();refreshAvatarSelector();loadPersona().then(refreshVoiceSelector);
 }
 const modelSelector=document.getElementById('model-selector');
 let modelCatalog=[];
@@ -497,6 +497,8 @@ modelSelector?.addEventListener('change',()=>{
   if(modelSelector.value)localStorage.setItem(`ani.model.${currentProfile}`,modelSelector.value);
 });
 const avatarSelector=document.getElementById('avatar-selector');
+const voiceSelector=document.getElementById('voice-selector');
+const QWEN_VOICES=['Vivian','Serena','Chelsie','Cherry','Ethan','Nuna','Ryan','Aiden','Sofia'];
 async function refreshAvatarSelector(){
   if(!avatarSelector)return;
   let catalog=[];let personaMap={};
@@ -528,12 +530,30 @@ avatarSelector?.addEventListener('change',()=>{
   if(confirm('Changer d’avatar recharge la page. Continuer ?'))location.reload();
   else{refreshAvatarSelector()}
 });
+function refreshVoiceSelector(){
+  if(!voiceSelector)return;
+  voiceSelector.replaceChildren(...QWEN_VOICES.map(voice=>{
+    const option=document.createElement('option');
+    option.value=voice;option.textContent=voice;
+    return option;
+  }));
+  voiceSelector.value=localStorage.getItem(`ani.voice.${currentProfile}`)||persona.voice||'Vivian';
+  persona.voice=voiceSelector.value;
+}
+voiceSelector?.addEventListener('change',()=>{
+  if(!voiceSelector.value)return;
+  localStorage.setItem(`ani.voice.${currentProfile}`,voiceSelector.value);
+  persona.voice=voiceSelector.value;
+  setEmotion('happy');
+});
 window.__aniAvatarFile=()=>localStorage.getItem(`ani.avatar.${currentProfile}`)||persona.avatar||'ani.vrm';
 async function loadPersona(){
   if(!currentProfile)return;
   try{
     const response=await fetch(`/api/persona?profile=${encodeURIComponent(currentProfile)}`);
     if(response.ok)persona=await response.json();
+    const savedVoice=localStorage.getItem(`ani.voice.${currentProfile}`);
+    if(savedVoice)persona.voice=savedVoice;
   }catch(_){}
   const nameElement=document.querySelector('.topbar strong');
   if(nameElement&&persona.display_name)nameElement.textContent=persona.display_name;
@@ -542,7 +562,7 @@ loadPersona();
 profilePicker?.querySelectorAll('[data-profile]').forEach(button=>{
   button.addEventListener('click',()=>selectProfile(button.dataset.profile));
 });
-if(!currentProfile)showProfilePicker();else{refreshModelSelector();refreshAvatarSelector()}
+if(!currentProfile)showProfilePicker();else{refreshModelSelector();refreshAvatarSelector();refreshVoiceSelector()}
 
 let pendingImage=null;
 let cameraView=null;

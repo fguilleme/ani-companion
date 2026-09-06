@@ -877,7 +877,7 @@ class AniCompanionTests(unittest.TestCase):
 
     def test_service_worker_precaches_avatar_runtime(self):
         worker = (ROOT / 'static' / 'sw.js').read_text()
-        self.assertIn("const CACHE='ani-companion-v41'", worker)
+        self.assertIn("const CACHE='ani-companion-v42'", worker)
         self.assertIn("'/avatar-3d.bundle.js'", worker)
 
     def test_service_worker_activates_pipeline_update_immediately(self):
@@ -890,9 +890,9 @@ class AniCompanionTests(unittest.TestCase):
         html = (ROOT / 'static' / 'index.html').read_text()
         worker = (ROOT / 'static' / 'sw.js').read_text()
         self.assertIn('href="/style.css?v=33"', html)
-        self.assertIn('src="/app.js?v=41"', html)
+        self.assertIn('src="/app.js?v=42"', html)
         self.assertIn("'/style.css?v=33'", worker)
-        self.assertIn("'/app.js?v=41'", worker)
+        self.assertIn("'/app.js?v=42'", worker)
 
     def test_phase_timer_does_not_flood_accessibility_announcements(self):
         html = (ROOT / 'static' / 'index.html').read_text()
@@ -1043,7 +1043,7 @@ class AniCompanionTests(unittest.TestCase):
     def test_models_catalog_is_queried_at_startup(self):
         script = (ROOT / 'static' / 'app.js').read_text()
         self.assertIn('refreshModelSelector', script)
-        self.assertIn('else{refreshModelSelector();refreshAvatarSelector()}', script)
+        self.assertIn('else{refreshModelSelector();refreshAvatarSelector();refreshVoiceSelector()}', script)
 
 
 if __name__ == '__main__':
