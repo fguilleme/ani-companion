@@ -8,6 +8,8 @@ const statusPlayer=document.getElementById('status-player');
 const contextMeter=document.getElementById('context-meter');
 const contextMeterFill=contextMeter?.querySelector('.context-meter-fill');
 const micButton=document.getElementById('mic-button');
+const cameraButton=document.getElementById('camera-button');
+const screenButton=document.getElementById('screen-button');
 const installButton=document.getElementById('install-button');
 const profilePicker=document.getElementById('profile-picker');
 const phaseIndicator=document.getElementById('phase-indicator');
@@ -498,6 +500,50 @@ profilePicker?.querySelectorAll('[data-profile]').forEach(button=>{
 });
 if(!currentProfile)showProfilePicker();else refreshModelSelector();
 
+let pendingImage=null;
+function setImagePreview(dataUrl){
+  pendingImage=dataUrl;
+  cameraButton?.classList.toggle('active',!!dataUrl);
+  screenButton?.classList.toggle('active',!!dataUrl);
+  const existing=document.getElementById('ani-image-preview');
+  if(existing)existing.remove();
+  if(!dataUrl)return;
+  const preview=document.createElement('img');
+  preview.id='ani-image-preview';
+  preview.src=dataUrl;
+  preview.alt='Image jointe';
+  preview.addEventListener('click',()=>setImagePreview(null));
+  history.appendChild(preview);history.scrollTop=history.scrollHeight;
+}
+async function captureFrame(getStream,label){
+  try{
+    const stream=await getStream();
+    const video=document.createElement('video');
+    video.srcObject=stream;video.muted=true;
+    await new Promise(resolve=>{video.onloadedmetadata=resolve});
+    await video.play();
+    await new Promise(resolve=>setTimeout(resolve,350));
+    const canvas=document.createElement('canvas');
+    canvas.width=video.videoWidth||1280;canvas.height=video.videoHeight||720;
+    canvas.getContext('2d').drawImage(video,0,0);
+    stream.getTracks().forEach(track=>track.stop());
+    setImagePreview(canvas.toDataURL('image/jpeg',0.85));
+    if(!input.value.trim())input.value=label;
+  }catch(error){
+    bubble(error?.name==='NotAllowedError'?'Autorisation refusée.':'Capture indisponible.','ani');
+  }
+}
+cameraButton?.addEventListener('click',()=>{
+  if(pendingImage){setImagePreview(null);return}
+  if(!navigator.mediaDevices?.getUserMedia){bubble('Caméra indisponible ici.','ani');return}
+  captureFrame(()=>navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:1280}}}),'Regarde-moi. ');
+});
+screenButton?.addEventListener('click',()=>{
+  if(pendingImage){setImagePreview(null);return}
+  if(!navigator.mediaDevices?.getDisplayMedia){bubble('Partage d’écran indisponible ici.','ani');return}
+  captureFrame(()=>navigator.mediaDevices.getDisplayMedia({video:true}),'Regarde mon écran. ');
+});
+
 form.addEventListener('submit',async event=>{
   event.preventDefault();const message=input.value.trim();if(!message)return;
   if(!currentProfile){showProfilePicker();return}
@@ -517,7 +563,8 @@ form.addEventListener('submit',async event=>{
     }
   },6000);
   try{
-    const response=await fetch('/api/chat/stream',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message,session_id:sessionState.sessionId,turn_id:turnId,profile:currentProfile,model:localStorage.getItem(`ani.model.${currentProfile}`)||null}),signal:chatController.signal});
+    const response=await fetch('/api/chat/stream',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message,session_id:sessionState.sessionId,turn_id:turnId,profile:currentProfile,model:localStorage.getItem(`ani.model.${currentProfile}`)||null,image:pendingImage}),signal:chatController.signal});
+    setImagePreview(null);
     if(turnId!==activeTurnId)return;
     if(!response.ok){const data=await response.json();throw new Error(data.detail||'Ani ne répond pas')}
     await readNdjson(response,async event=>{

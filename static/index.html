@@ -11,7 +11,7 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icons/ani-192.png" type="image/png">
   <link rel="apple-touch-icon" href="/icons/ani-192.png">
-  <link rel="stylesheet" href="/style.css?v=32">
+  <link rel="stylesheet" href="/style.css?v=33">
 </head>
 <body>
   <main class="companion-shell">
@@ -50,6 +50,19 @@
     <section class="conversation" aria-label="Conversation avec Ani">
       <div id="history" class="history" aria-live="polite"><div class="history-sentinel" aria-hidden="true"></div></div>
       <form id="chat-form" autocomplete="off">
+        <button id="camera-button" class="capture" type="button" aria-label="Prendre une photo">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+            <circle cx="12" cy="13" r="4"/>
+          </svg>
+        </button>
+        <button id="screen-button" class="capture" type="button" aria-label="Montrer mon écran">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="2" y="3" width="20" height="14" rx="2"/>
+            <line x1="8" y1="21" x2="16" y2="21"/>
+            <line x1="12" y1="17" x2="12" y2="21"/>
+          </svg>
+        </button>
         <button id="mic-button" class="mic" type="button" aria-label="Parler à Ani">
           <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
@@ -66,7 +79,7 @@
   <audio id="voice-player" preload="none"></audio>
   <audio id="status-player" preload="none"></audio>
   <script src="/avatar-3d.bundle.js" defer></script>
-  <script src="/app.js?v=35" defer></script>
+  <script src="/app.js?v=36" defer></script>
   <script>if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js'))</script>
 </body>
 </html>

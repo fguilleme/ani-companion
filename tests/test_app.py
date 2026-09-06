@@ -122,6 +122,7 @@ class AniCompanionTests(unittest.TestCase):
         self.assertTrue(prompt.startswith('Raconte-moi quelque chose.'))
         self.assertIn('première phrase à environ dix mots maximum', prompt)
         self.assertIn('sans points de suspension', prompt)
+        self.assertIn('de façon concise', prompt)
 
     def test_tts_timing_logs_include_attempt_audio_metrics_and_ellipsis_text(self):
         source = (ROOT / 'app.py').read_text()
@@ -454,6 +455,45 @@ class AniCompanionTests(unittest.TestCase):
         source = (ROOT / 'app.py').read_text()
         self.assertIn("'Submit did not stream: status=%r result_keys=%s'", source)
 
+    def test_decode_image_data_url_accepts_png_and_rejects_bad_input(self):
+        import base64 as _base64
+        from app import decode_image_data_url
+
+        png_b64 = _base64.b64encode(b'\x89PNG\r\n\x1a\n' + b'x' * 64).decode()
+        path, extension = decode_image_data_url(f'data:image/png;base64,{png_b64}')
+        import tempfile as _tempfile
+        try:
+            self.assertTrue(path.startswith(_tempfile.gettempdir()))
+            self.assertEqual(extension, '.png')
+            self.assertTrue(Path(path).is_file())
+        finally:
+            Path(path).unlink(missing_ok=True)
+
+    def test_decode_image_data_url_rejects_oversize_and_unknown(self):
+        import base64 as _base64
+        from app import decode_image_data_url
+        from fastapi import HTTPException
+
+        with self.assertRaises(HTTPException):
+            decode_image_data_url('data:image/png;base64,' + 'A' * (12 * 1024 * 1024))
+        with self.assertRaises(HTTPException):
+            decode_image_data_url('data:image/png;base64,' + _base64.b64encode(b'not-an-image').decode())
+        with self.assertRaises(HTTPException):
+            decode_image_data_url('garbage')
+
+    def test_chat_stream_attaches_image_before_submit(self):
+        source = (ROOT / 'app.py').read_text()
+        self.assertIn("'image.attach'", source)
+        self.assertIn('decode_image_data_url, payload.image)', source)
+
+    def test_pwa_offers_camera_and_screen_capture_buttons(self):
+        html = (ROOT / 'static' / 'index.html').read_text()
+        script = (ROOT / 'static' / 'app.js').read_text()
+        self.assertIn('id="camera-button"', html)
+        self.assertIn('id="screen-button"', html)
+        self.assertIn('getDisplayMedia', script)
+        self.assertIn('ani-image-preview', script)
+
     def test_gateway_deadline_is_not_reset_by_malformed_output(self):
         class NoisyStdout:
             async def readline(self):
@@ -747,7 +787,7 @@ class AniCompanionTests(unittest.TestCase):
 
     def test_service_worker_precaches_avatar_runtime(self):
         worker = (ROOT / 'static' / 'sw.js').read_text()
-        self.assertIn("const CACHE='ani-companion-v35'", worker)
+        self.assertIn("const CACHE='ani-companion-v36'", worker)
         self.assertIn("'/avatar-3d.bundle.js'", worker)
 
     def test_service_worker_activates_pipeline_update_immediately(self):
@@ -759,10 +799,10 @@ class AniCompanionTests(unittest.TestCase):
     def test_interface_assets_are_cache_busted_for_installed_pwa(self):
         html = (ROOT / 'static' / 'index.html').read_text()
         worker = (ROOT / 'static' / 'sw.js').read_text()
-        self.assertIn('href="/style.css?v=32"', html)
-        self.assertIn('src="/app.js?v=35"', html)
-        self.assertIn("'/style.css?v=32'", worker)
-        self.assertIn("'/app.js?v=35'", worker)
+        self.assertIn('href="/style.css?v=33"', html)
+        self.assertIn('src="/app.js?v=36"', html)
+        self.assertIn("'/style.css?v=33'", worker)
+        self.assertIn("'/app.js?v=36'", worker)
 
     def test_phase_timer_does_not_flood_accessibility_announcements(self):
         html = (ROOT / 'static' / 'index.html').read_text()

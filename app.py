@@ -1,4 +1,6 @@
 import asyncio
+import base64
+import binascii
 from collections import deque
 from contextlib import asynccontextmanager
 import httpx
@@ -65,6 +67,44 @@ class ChatRequest(BaseModel):
     turn_id: int = Field(default=0, ge=0)
     profile: str = Field(default=DEFAULT_PROFILE, max_length=32)
     model: str | None = Field(default=None, max_length=160)
+    image: str | None = Field(default=None, max_length=15_000_000)
+
+
+_IMAGE_MIME_EXTENSIONS = {'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp'}
+_IMAGE_MAGIC = (
+    (b'\x89PNG\r\n\x1a\n', '.png'),
+    (b'\xff\xd8\xff', '.jpg'),
+    (b'RIFF', '.webp'),
+)
+VISION_IMAGE_MAX_BYTES = 10 * 1024 * 1024
+_DATA_URL_RE = re.compile(r'^data:(image/[a-z+.-]+);base64,([A-Za-z0-9+/=\s]+)$')
+
+
+def decode_image_data_url(data_url: str) -> tuple[str, str]:
+    """Validate a base64 image data URL and stage it in a private temp file for Hermes.
+
+    Returns (path, extension); raises HTTPException on any invalid input. Size-capped, magic-byte
+    checked, unpredictably named; the caller deletes the file after the turn."""
+    match = _DATA_URL_RE.fullmatch(data_url or '')
+    if not match:
+        raise HTTPException(status_code=422, detail='Image invalide.')
+    try:
+        raw = base64.b64decode(match.group(2), validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise HTTPException(status_code=422, detail='Image invalide.') from exc
+    if not raw:
+        raise HTTPException(status_code=422, detail='Image vide.')
+    if len(raw) > VISION_IMAGE_MAX_BYTES:
+        raise HTTPException(status_code=413, detail='Image trop volumineuse (10 Mo max).')
+    extension = next(
+        (ext for magic, ext in _IMAGE_MAGIC if raw.startswith(magic)), None)
+    if extension is None:
+        raise HTTPException(status_code=422, detail='Format d’image non pris en charge.')
+    descriptor, path = tempfile.mkstemp(prefix='ani-vision-', suffix=extension)
+    with os.fdopen(descriptor, 'wb') as handle:
+        handle.write(raw)
+    os.chmod(path, 0o600)
+    return path, extension
 
 
 class CancelRequest(BaseModel):
@@ -95,7 +135,7 @@ async def security_headers(request, call_next):
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['X-Frame-Options'] = 'DENY'
     response.headers['Referrer-Policy'] = 'no-referrer'
-    response.headers['Permissions-Policy'] = 'camera=(), geolocation=(), microphone=(self)'
+    response.headers['Permissions-Policy'] = 'camera=(self), geolocation=(), microphone=(self)'
     return response
 
 
@@ -483,7 +523,8 @@ def _stream_event(event_type: str, **payload) -> bytes:
 
 STREAMING_VOICE_INSTRUCTION = (
     "\n\nInstruction de forme pour la voix : commence par une première phrase à environ dix mots maximum, "
-    "complète et naturelle. Écris sans points de suspension ; préfère une virgule ou un point."
+    "complète et naturelle. Écris sans points de suspension ; préfère une virgule ou un point. "
+    "Réponds de façon concise : deux ou trois phrases courtes suffisent, sauf si on te demande un développement."
 )
 
 
@@ -657,6 +698,7 @@ def _clear_stale_turn_lease(session_id: str) -> None:
 async def stream_chat_events(payload: ChatRequest, turn_key: str):
     process = None
     stderr_task = None
+    image_path = None
     planner = StreamingSpeechBuffer()
     reply_parts: list[str] = []
     stored_session_id = payload.session_id
@@ -741,6 +783,19 @@ async def stream_chat_events(payload: ChatRequest, turn_key: str):
                 notifications,
                 deadline,
             )
+            if payload.image:
+                image_path, _extension = await asyncio.to_thread(
+                    decode_image_data_url, payload.image)
+                attached = await _gateway_rpc(
+                    process,
+                    '2b',
+                    'image.attach',
+                    {'session_id': runtime_session_id, 'path': image_path},
+                    notifications,
+                    deadline,
+                )
+                if not attached.get('attached'):
+                    logger.warning('Image attach failed: %r', attached)
             submitted = await _gateway_rpc(
                 process,
                 '3',
@@ -835,6 +890,8 @@ async def stream_chat_events(payload: ChatRequest, turn_key: str):
         logger.exception('Hermes streaming failed')
         yield _stream_event('error', message='La réponse locale d’Ani a échoué.')
     finally:
+        if image_path:
+            _delete_file(image_path)
         if process is not None:
             if ACTIVE_CHAT_PROCESSES.get(turn_key) is process:
                 ACTIVE_CHAT_PROCESSES.pop(turn_key, None)

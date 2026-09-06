@@ -8,7 +8,7 @@ Type=simple
 WorkingDirectory=/home/francois/ani-companion
 Environment="HERMES_HOME=/home/francois/.hermes/profiles/ani"
 Environment="PATH=/home/francois/.hermes/hermes-agent/venv/bin:/usr/local/bin:/usr/bin:/bin"
-Environment="ANI_HERMES_MODEL=ani-gemma4:latest"
+Environment="ANI_HERMES_MODEL=hauhau-gemma4-vision:test"
 Environment="ANI_HERMES_PROVIDER=custom"
 Environment="ANI_HERMES_TOOLSETS=memory"
 Environment="ANI_QWEN_TTS_URL=http://127.0.0.1:15004/v1/audio/speech"
