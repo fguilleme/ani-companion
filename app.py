@@ -406,8 +406,49 @@ def _wav_is_audible(audio: bytes) -> bool:
     return bool(_wav_metrics(audio)['audible'])
 
 
+_THINK_BLOCK_RE = re.compile(r'(?:</think>|<channel>.*?</channel>)', re.DOTALL | re.IGNORECASE)
+_INLINE_MATH_RE = re.compile(r'\$\$([^$]+)\$\$|\$([^$\n]+)\$')
+
+
+def _latex_to_text(text: str) -> str:
+    """Reduce LaTeX to readable text: \text{x} -> x, \times -> ×, subscripts H_2 -> H2, etc."""
+
+    def _render(match):
+        inner = match.group(1) or match.group(2) or ''
+        inner = re.sub(r'\\(?:text|mathrm|mathbf)\{([^{}]*)\}', r'\1', inner)
+        inner = re.sub(r'\\times|\\cdot', '×', inner)
+        inner = re.sub(r'\\(?:left|right)', '', inner)
+        inner = inner.replace('\\', '')
+        inner = re.sub(r'_\{([^{}]*)\}', r'\1', inner)
+        inner = re.sub(r'_([A-Za-z0-9])', r'\1', inner)
+        inner = re.sub(r'\^\{([^{}]*)\}', r'^\1', inner)
+        inner = re.sub(r'\^([A-Za-z0-9])', r'^\1', inner)
+        return inner.strip()
+
+    return _INLINE_MATH_RE.sub(_render, text)
+
+
+def strip_markup(text: str) -> str:
+    """Make model output display/speech safe: thinking blocks, markdown, LaTeX, HTML tags.
+
+    Ordered: thinking blocks first, then block-level markdown, then LaTeX, then residual tags."""
+    cleaned = _THINK_BLOCK_RE.sub(' ', text)
+    cleaned = re.sub(r'^#{1,6}\s+', '', cleaned, flags=re.MULTILINE)
+    cleaned = re.sub(r'^\s*[-*+]\s+', '• ', cleaned, flags=re.MULTILINE)
+    cleaned = re.sub(r'(\*\*\*|___)(?=\S)(.+?)(?<=\S)\1', r'\2', cleaned)
+    cleaned = re.sub(r'(\*\*|__)(?=\S)(.+?)(?<=\S)\1', r'\2', cleaned)
+    cleaned = re.sub(r'(?<![\w*])\*(?=\S)([^*\n]+?)(?<=\S)\*(?![\w*])', r'\1', cleaned)
+    cleaned = re.sub(r'(?<!\w)`(?=\S)([^`]+?)(?<=\S)`(?!\w)', r'\1', cleaned)
+    cleaned = _latex_to_text(cleaned)
+    cleaned = re.sub(r'<(?:br\s*/?>|/p|p[^>]*|/div|div[^>]*|/li|li[^>]*|/h[1-6]|h[1-6][^>]*)>', ' ', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r'<[^>\n]{1,200}>', '', cleaned)
+    cleaned = re.sub(r'[ \t]+\n', '\n', cleaned)
+    return re.sub(r'[ \t]{2,}', ' ', cleaned).strip()
+
+
 def prepare_spoken_text(text: str) -> str:
-    spoken = re.sub(r'^\([^)]+\)\s*', '', text.strip())
+    spoken = strip_markup(text)
+    spoken = re.sub(r'^\([^)]+\)\s*', '', spoken)
     spoken = re.sub(r'\[[^\]]+\]', ' ', spoken)
     spoken = re.sub(r'\s*[—–―]\s*|\s+-\s+', '. ', spoken)
     spoken = re.sub(r'(?:\.(?:\s*\.)+|[…⋯]+)', ', ', spoken)
@@ -436,7 +477,8 @@ def extract_reply_actions(text: str) -> list[dict[str, str]]:
 
 
 def prepare_display_text(text: str) -> str:
-    display = re.sub(r'^\([^)]+\)\s*', '', text.strip())
+    display = strip_markup(text)
+    display = re.sub(r'^\([^)]+\)\s*', '', display)
     display = re.sub(r'\[[^\]]+\]', ' ', display)
     display = re.sub(r'\s+([,.!?])', r'\1', display)
     return re.sub(r'\s+', ' ', display).strip()

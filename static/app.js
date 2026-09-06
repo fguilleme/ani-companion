@@ -679,6 +679,13 @@ form.addEventListener('submit',async event=>{
     clearTimeout(slowWakeTimer);slowWakeTimer=null;setEmotion(completed.emotion);setPhase('idle');
     refreshContextMeter();
     if(!activeAssistantBubble){
+      const lastAni=[...history.querySelectorAll('.bubble.ani')].pop();
+      if(lastAni&&streamedText&&completed.reply.replace(/\s+/g,' ').includes(
+          streamingDisplayText(streamedText).slice(0,120).replace(/\s+/g,' '))){
+        activeAssistantBubble=lastAni;
+      }
+    }
+    if(!activeAssistantBubble){
       if(isLandscapeLayout())activeAssistantBubble=pushLandscapeMessage(completed.reply,'ani');
       else activeAssistantBubble=bubble(completed.reply,'ani');
     }

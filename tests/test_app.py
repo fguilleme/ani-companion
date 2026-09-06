@@ -515,6 +515,24 @@ class AniCompanionTests(unittest.TestCase):
         avatar_source = (ROOT / 'src' / 'avatar-3d.js').read_text()
         self.assertIn('preserveDrawingBuffer: true', avatar_source)
 
+    def test_reply_presentation_strips_markdown_latex_and_thinking(self):
+        presentation = app_module.build_reply_presentation(
+            '</think>Calcul intermédiaire. **Résultat** : $\\text{H}_2\\text{SO}_4$ = $2 \\times 1.008$ + 32.06, soit **98,08 g/mol**. <br>Voilà.'
+        )
+        self.assertEqual(
+            presentation['reply'],
+            'Calcul intermédiaire. Résultat : H2SO4 = 2 × 1.008 + 32.06, soit 98,08 g/mol. Voilà.'
+        )
+        self.assertIn('98,08 g/mol', presentation['speech'])
+        self.assertNotIn('$', presentation['speech'])
+        self.assertNotIn('**', presentation['speech'])
+
+    def test_prepare_spoken_text_removes_html_tags_and_thinking_blocks(self):
+        spoken = app_module.prepare_spoken_text(
+            '</think>Analyse. <p>La réponse</p> est prête.'
+        )
+        self.assertEqual(spoken, 'Analyse. La réponse est prête.')
+
     def test_gateway_deadline_is_not_reset_by_malformed_output(self):
         class NoisyStdout:
             async def readline(self):
