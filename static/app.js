@@ -501,6 +501,7 @@ profilePicker?.querySelectorAll('[data-profile]').forEach(button=>{
 if(!currentProfile)showProfilePicker();else refreshModelSelector();
 
 let pendingImage=null;
+let cameraView=null;
 function setImagePreview(dataUrl){
   pendingImage=dataUrl;
   cameraButton?.classList.toggle('active',!!dataUrl);
@@ -515,28 +516,58 @@ function setImagePreview(dataUrl){
   preview.addEventListener('click',()=>setImagePreview(null));
   history.appendChild(preview);history.scrollTop=history.scrollHeight;
 }
-async function captureFrame(getStream,label){
-  try{
-    const stream=await getStream();
-    const video=document.createElement('video');
-    video.srcObject=stream;video.muted=true;
-    await new Promise(resolve=>{video.onloadedmetadata=resolve});
-    await video.play();
-    await new Promise(resolve=>setTimeout(resolve,350));
-    const canvas=document.createElement('canvas');
-    canvas.width=video.videoWidth||1280;canvas.height=video.videoHeight||720;
-    canvas.getContext('2d').drawImage(video,0,0);
-    stream.getTracks().forEach(track=>track.stop());
-    setImagePreview(canvas.toDataURL('image/jpeg',0.85));
-    if(!input.value.trim())input.value=label;
-  }catch(error){
-    bubble(error?.name==='NotAllowedError'?'Autorisation refusée.':'Capture indisponible.','ani');
-  }
+function stopCameraView(){
+  if(!cameraView)return;
+  cameraView.stream.getTracks().forEach(track=>track.stop());
+  cancelAnimationFrame(cameraView.frame);
+  cameraView.overlay.remove();
+  cameraView=null;
+}
+function startCameraView(){
+  const overlay=document.createElement('div');
+  overlay.id='ani-camera-view';
+  const video=document.createElement('video');
+  video.autoplay=true;video.playsInline=true;video.muted=true;
+  const sendButton=document.createElement('button');
+  sendButton.type='button';sendButton.textContent='Envoyer à Ani';
+  const closeButton=document.createElement('button');
+  closeButton.type='button';closeButton.textContent='Annuler';closeButton.className='ani-camera-cancel';
+  overlay.append(video,sendButton,closeButton);
+  document.body.appendChild(overlay);
+  const context=document.createElement('canvas').getContext('2d');
+  const draw=()=>{
+    if(!cameraView)return;
+    if(video.videoWidth){
+      context.canvas.width=video.videoWidth;context.canvas.height=video.videoHeight;
+      context.drawImage(video,0,0);
+    }
+    cameraView.frame=requestAnimationFrame(draw);
+  };
+  navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:1280}}}).then(stream=>{
+    if(!overlay.isConnected){stream.getTracks().forEach(track=>track.stop());return}
+    video.srcObject=stream;
+    cameraView={stream,overlay,frame:0};
+    video.play().catch(()=>{});
+    draw();
+  }).catch(error=>{
+    overlay.remove();cameraView=null;
+    bubble(error?.name==='NotAllowedError'?'Autorisation refusée.':'Caméra indisponible.','ani');
+  });
+  closeButton.addEventListener('click',()=>{stopCameraView()});
+  sendButton.addEventListener('click',()=>{
+    if(!cameraView)return;
+    const width=context.canvas.width||1280,height=context.canvas.height||720;
+    const out=document.createElement('canvas');out.width=width;out.height=height;
+    out.getContext('2d').drawImage(context.canvas,0,0);
+    setImagePreview(out.toDataURL('image/jpeg',0.85));
+    stopCameraView();
+    if(!input.value.trim())input.value='Regarde-moi. ';
+  });
 }
 cameraButton?.addEventListener('click',()=>{
-  if(pendingImage){setImagePreview(null);return}
+  if(cameraView){stopCameraView();return}
   if(!navigator.mediaDevices?.getUserMedia){bubble('Caméra indisponible ici.','ani');return}
-  captureFrame(()=>navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:1280}}}),'Regarde-moi. ');
+  startCameraView();
 });
 screenButton?.addEventListener('click',()=>{
   if(pendingImage){setImagePreview(null);return}
