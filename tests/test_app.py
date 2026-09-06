@@ -577,11 +577,14 @@ class AniCompanionTests(unittest.TestCase):
         self.assertNotIn('SpeechRecognition', script)
         self.assertIn('Microphone refusé', script)
 
-    def test_microphone_vad_ignores_ani_speaker_output(self):
+    def test_microphone_vad_interrupts_audio_without_cancelling_the_llm(self):
         script = (ROOT / 'static' / 'app.js').read_text()
-        guard = "if((!player.paused&&!player.ended)||(!statusPlayer.paused&&!statusPlayer.ended))"
-        self.assertIn(guard, script)
-        self.assertLess(script.index(guard), script.index("if(rms>0.028)"))
+        self.assertIn('const BARGE_IN_RMS_THRESHOLD=0.035', script)
+        self.assertIn('const BARGE_IN_HOLD_MS=180', script)
+        self.assertIn('if(assistantAudioPlaying)', script)
+        self.assertIn('now-bargeInStarted>=BARGE_IN_HOLD_MS', script)
+        self.assertIn('interruptAudioForBargeIn()', script)
+        self.assertIn('startUtterance({preserveAniTurn:true})', script)
 
     def test_microphone_is_continuous_hands_free_with_local_vad(self):
         script = (ROOT / 'static' / 'app.js').read_text()
@@ -735,7 +738,7 @@ class AniCompanionTests(unittest.TestCase):
 
     def test_service_worker_precaches_avatar_runtime(self):
         worker = (ROOT / 'static' / 'sw.js').read_text()
-        self.assertIn("const CACHE='ani-companion-v31'", worker)
+        self.assertIn("const CACHE='ani-companion-v34'", worker)
         self.assertIn("'/avatar-3d.bundle.js'", worker)
 
     def test_service_worker_activates_pipeline_update_immediately(self):
@@ -748,9 +751,9 @@ class AniCompanionTests(unittest.TestCase):
         html = (ROOT / 'static' / 'index.html').read_text()
         worker = (ROOT / 'static' / 'sw.js').read_text()
         self.assertIn('href="/style.css?v=31"', html)
-        self.assertIn('src="/app.js?v=31"', html)
+        self.assertIn('src="/app.js?v=34"', html)
         self.assertIn("'/style.css?v=31'", worker)
-        self.assertIn("'/app.js?v=31'", worker)
+        self.assertIn("'/app.js?v=34'", worker)
 
     def test_phase_timer_does_not_flood_accessibility_announcements(self):
         html = (ROOT / 'static' / 'index.html').read_text()

@@ -280,6 +280,16 @@ function cancelActiveAniTurn({removeBubble=false}={}){
   activeAssistantBubble=null;aniTurnActive=false;
 }
 
+function interruptAudioForBargeIn(){
+  streamingSpeech?.cancel();streamingSpeech=null;
+  ttsController?.abort();ttsController=null;
+  stopStatusNotice();
+  player.pause();
+  if(activeAudioUrl){URL.revokeObjectURL(activeAudioUrl);activeAudioUrl=null}
+  player.removeAttribute('src');player.load();
+  stopLipSync();
+}
+
 async function fetchAudioChunk(text,emotion,instructions,turnId,chunkSeq){
   ttsController=new AbortController();
   const started=performance.now();
@@ -587,6 +597,10 @@ let transcribing=false;
 let discardRecording=false;
 const END_OF_SPEECH_SILENCE_MS=1300;
 const TRANSCRIPT_COMMIT_GRACE_MS=500;
+const SPEECH_RMS_THRESHOLD=0.028;
+const BARGE_IN_RMS_THRESHOLD=0.035;
+const BARGE_IN_HOLD_MS=180;
+let bargeInStarted=0;
 let pendingTranscript='';
 let transcriptCommitTimer=null;
 let queuedTranscriptions=0;
@@ -605,6 +619,7 @@ function scheduleTranscriptCommit(){
   transcriptCommitTimer=setTimeout(()=>{
     transcriptCommitTimer=null;
     if(utteranceRecorder||queuedTranscriptions)return;
+    if(aniTurnActive){scheduleTranscriptCommit();return}
     const message=pendingTranscript.trim();pendingTranscript='';
     if(message){input.value=message;form.requestSubmit()}
   },TRANSCRIPT_COMMIT_GRACE_MS);
@@ -634,10 +649,10 @@ function queueTranscription(blob){
     });
 }
 
-function startUtterance(){
+function startUtterance({preserveAniTurn=false}={}){
   if(!microphoneMode||utteranceRecorder)return;
   clearTimeout(transcriptCommitTimer);transcriptCommitTimer=null;
-  if(aniTurnActive)cancelActiveAniTurn({removeBubble:true});
+  if(aniTurnActive&&!preserveAniTurn)cancelActiveAniTurn({removeBubble:true});
   utteranceChunks=[];discardRecording=false;
   const mimeType=recorderMimeType();
   utteranceRecorder=new MediaRecorder(micStream,mimeType?{mimeType}:undefined);
@@ -654,19 +669,28 @@ function startUtterance(){
 
 function monitorVoiceActivity(){
   if(!microphoneMode)return;
-  if((!player.paused&&!player.ended)||(!statusPlayer.paused&&!statusPlayer.ended)){
-    silenceStarted=0;
-    if(utteranceRecorder?.state==='recording'){
-      discardRecording=true;utteranceRecorder.stop();
-    }
-    micFrame=requestAnimationFrame(monitorVoiceActivity);return;
-  }
   micAnalyser.getByteTimeDomainData(micWaveform);
   let energy=0;
   for(const sample of micWaveform){const value=(sample-128)/128;energy+=value*value}
   const rms=Math.sqrt(energy/micWaveform.length);
+  window.__aniMicRms=rms;
   const now=performance.now();
-  if(rms>0.028){
+  const assistantAudioPlaying=(!player.paused&&!player.ended)||(!statusPlayer.paused&&!statusPlayer.ended);
+  if(assistantAudioPlaying){
+    silenceStarted=0;
+    if(utteranceRecorder?.state==='recording'){
+      discardRecording=true;utteranceRecorder.stop();
+    }
+    if(rms>BARGE_IN_RMS_THRESHOLD){
+      if(!bargeInStarted)bargeInStarted=now;
+      else if(now-bargeInStarted>=BARGE_IN_HOLD_MS){
+        bargeInStarted=0;interruptAudioForBargeIn();startUtterance({preserveAniTurn:true});
+      }
+    }else bargeInStarted=0;
+    micFrame=requestAnimationFrame(monitorVoiceActivity);return;
+  }
+  bargeInStarted=0;
+  if(rms>SPEECH_RMS_THRESHOLD){
     silenceStarted=0;
     if(!utteranceRecorder)startUtterance();
   }else if(utteranceRecorder?.state==='recording'&&now-speechStarted>400){
