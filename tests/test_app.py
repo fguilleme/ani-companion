@@ -389,7 +389,6 @@ class AniCompanionTests(unittest.TestCase):
                 'session_id': 'stored-1',
                 'turn_id': 91,
             })
-
         self.assertEqual(response.status_code, 200)
         events = [json.loads(line) for line in response.text.splitlines()]
         event_types = [event['type'] for event in events]
@@ -738,7 +737,7 @@ class AniCompanionTests(unittest.TestCase):
 
     def test_service_worker_precaches_avatar_runtime(self):
         worker = (ROOT / 'static' / 'sw.js').read_text()
-        self.assertIn("const CACHE='ani-companion-v34'", worker)
+        self.assertIn("const CACHE='ani-companion-v35'", worker)
         self.assertIn("'/avatar-3d.bundle.js'", worker)
 
     def test_service_worker_activates_pipeline_update_immediately(self):
@@ -750,10 +749,10 @@ class AniCompanionTests(unittest.TestCase):
     def test_interface_assets_are_cache_busted_for_installed_pwa(self):
         html = (ROOT / 'static' / 'index.html').read_text()
         worker = (ROOT / 'static' / 'sw.js').read_text()
-        self.assertIn('href="/style.css?v=31"', html)
-        self.assertIn('src="/app.js?v=34"', html)
-        self.assertIn("'/style.css?v=31'", worker)
-        self.assertIn("'/app.js?v=34'", worker)
+        self.assertIn('href="/style.css?v=32"', html)
+        self.assertIn('src="/app.js?v=35"', html)
+        self.assertIn("'/style.css?v=32'", worker)
+        self.assertIn("'/app.js?v=35'", worker)
 
     def test_phase_timer_does_not_flood_accessibility_announcements(self):
         html = (ROOT / 'static' / 'index.html').read_text()
@@ -792,6 +791,115 @@ class AniCompanionTests(unittest.TestCase):
         self.assertIn("'francois'", source)
         self.assertIn("'salome'", source)
         self.assertIn("if payload.profile not in HERMES_PROFILES", source)
+
+    def test_models_catalog_lists_available_local_models(self):
+        client = TestClient(app)
+        response = client.get('/api/models')
+        self.assertEqual(response.status_code, 200)
+        catalog = response.json()
+        self.assertTrue(catalog['models'])
+        ids = {model['id'] for model in catalog['models']}
+        self.assertIn('ani-gemma4:latest', ids)
+        for model in catalog['models']:
+            self.assertIsInstance(model['vision'], bool)
+
+    def test_chat_stream_rejects_unknown_model(self):
+        client = TestClient(app)
+        response = client.post('/api/chat/stream', json={
+            'message': 'Coucou.',
+            'profile': 'francois',
+            'model': 'modele-inexistant:test',
+        })
+        self.assertEqual(response.status_code, 422)
+
+    def test_chat_stream_accepts_vision_model_from_catalog(self):
+        client = TestClient(app)
+        response = client.post('/api/chat/stream', json={
+            'message': 'Coucou.',
+            'profile': 'francois',
+            'model': 'hauhau-gemma4-vision:test',
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(any('"start"' in line for line in response.text.splitlines()))
+
+    def test_selected_model_overrides_env_model_for_gateway(self):
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            self._run_selected_model_overrides_env_model_for_gateway()
+        finally:
+            asyncio.set_event_loop(None)
+            loop.close()
+
+    def _run_selected_model_overrides_env_model_for_gateway(self):
+        class FakeStdin:
+            def __init__(self):
+                self.writes = []
+
+            def write(self, _data):
+                self.writes.append(_data)
+
+            async def drain(self):
+                return None
+
+            def close(self):
+                return None
+
+        class FakeProcess:
+            def __init__(self):
+                self.stdin = FakeStdin()
+                self.stdout = asyncio.StreamReader()
+                self.stderr = asyncio.StreamReader()
+                self.returncode = 0
+                messages = [
+                    {'jsonrpc': '2.0', 'method': 'event', 'params': {'type': 'gateway.ready'}},
+                    {'jsonrpc': '2.0', 'id': '1', 'result': {
+                        'session_id': 'runtime-model',
+                        'stored_session_id': 'stored-model',
+                    }},
+                    {'jsonrpc': '2.0', 'id': '2', 'result': {'scope': 'session', 'value': 'hauhau-gemma4-vision:test'}},
+                    {'jsonrpc': '2.0', 'id': '3', 'result': {'status': 'streaming'}},
+                    {'jsonrpc': '2.0', 'method': 'event', 'params': {
+                        'type': 'message.complete',
+                        'session_id': 'runtime-model',
+                        'payload': {'text': '(French) Bonjour.'},
+                    }},
+                ]
+                for message in messages:
+                    self.stdout.feed_data((json.dumps(message) + '\n').encode())
+                self.stdout.feed_eof()
+                self.stderr.feed_eof()
+
+            async def wait(self):
+                return self.returncode
+
+        fake_process = FakeProcess()
+        with patch.object(
+            app_module.asyncio,
+            'create_subprocess_exec',
+            new=AsyncMock(return_value=fake_process),
+        ):
+            response = TestClient(app).post('/api/chat/stream', json={
+                'message': 'Dis bonjour.',
+                'model': 'hauhau-gemma4-vision:test',
+            })
+
+        self.assertEqual(response.status_code, 200)
+        requests = [json.loads(raw) for raw in fake_process.stdin.writes]
+        self.assertEqual(requests[1]['params']['value'], 'hauhau-gemma4-vision:test --provider custom --session')
+
+    def test_pwa_offers_a_model_selector_per_profile(self):
+        script = (ROOT / 'static' / 'app.js').read_text()
+        html = (ROOT / 'static' / 'index.html').read_text()
+        self.assertIn('id="model-selector"', html)
+        self.assertIn('ani.model.${currentProfile}', script)
+        self.assertIn("fetch('/api/models'", script)
+        self.assertIn('profile:currentProfile', script)
+
+    def test_models_catalog_is_queried_at_startup(self):
+        script = (ROOT / 'static' / 'app.js').read_text()
+        self.assertIn('refreshModelSelector', script)
+        self.assertIn('else refreshModelSelector();', script)
 
 
 if __name__ == '__main__':

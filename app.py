@@ -64,6 +64,7 @@ class ChatRequest(BaseModel):
     session_id: str | None = Field(default=None, max_length=160)
     turn_id: int = Field(default=0, ge=0)
     profile: str = Field(default=DEFAULT_PROFILE, max_length=32)
+    model: str | None = Field(default=None, max_length=160)
 
 
 class CancelRequest(BaseModel):
@@ -101,6 +102,56 @@ async def security_headers(request, call_next):
 @app.get('/api/health')
 def health():
     return {'status': 'ready', 'companion': 'Ani'}
+
+
+OLLAMA_BASE_URL = os.getenv('ANI_OLLAMA_BASE_URL', 'http://127.0.0.1:11434')
+MODELS_CACHE_TTL_SECONDS = max(1, int(os.getenv('ANI_MODELS_CACHE_TTL_SECONDS', '30')))
+_models_cache: tuple[float, list[dict]] | None = None
+MODELS_RE = re.compile(r'^[A-Za-z0-9._:/-]{1,160}$')
+
+
+def fetch_local_models() -> list[dict]:
+    global _models_cache
+    now = time.monotonic()
+    if _models_cache is not None and now - _models_cache[0] < MODELS_CACHE_TTL_SECONDS:
+        return _models_cache[1]
+    request = urllib.request.Request(f'{OLLAMA_BASE_URL}/api/tags')
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            payload = json.load(response)
+    except (OSError, ValueError):
+        payload = {}
+    models = [
+        {
+            'id': entry.get('name', ''),
+            'vision': bool(entry.get('capabilities')) and 'vision' in entry.get('capabilities', []),
+        }
+        for entry in payload.get('models', [])
+        if entry.get('name')
+    ]
+    if models:
+        _models_cache = (now, models)
+    return models
+
+
+async def resolve_model_async(requested: str | None) -> str:
+    if requested is None:
+        return HERMES_MODEL
+    candidate = requested.strip()
+    if not candidate or not MODELS_RE.fullmatch(candidate):
+        raise HTTPException(status_code=422, detail='Modèle inconnu.')
+    catalog = await asyncio.to_thread(fetch_local_models)
+    if candidate not in {model['id'] for model in catalog}:
+        raise HTTPException(status_code=422, detail='Modèle inconnu.')
+    return candidate
+
+
+@app.get('/api/models')
+def list_models():
+    models = fetch_local_models()
+    if not models:
+        models = [{'id': HERMES_MODEL, 'vision': False}]
+    return {'models': models}
 
 
 def parse_hermes_output(raw: str) -> tuple[str, str | None]:
@@ -569,6 +620,7 @@ async def stream_chat_events(payload: ChatRequest, turn_key: str):
     compression_active = False
     deadline = asyncio.get_running_loop().time() + CHAT_TIMEOUT_SECONDS
     profile_home = HERMES_PROFILES.get(payload.profile, HERMES_PROFILES[DEFAULT_PROFILE])
+    selected_model = await resolve_model_async(payload.model)
     try:
         async with _semaphore_before_deadline(RUN_SEMAPHORE, deadline):
             process = await asyncio.wait_for(
@@ -585,7 +637,7 @@ async def stream_chat_events(payload: ChatRequest, turn_key: str):
                     env={
                         **os.environ,
                         'HERMES_HOME': profile_home,
-                        'HERMES_MODEL': HERMES_MODEL,
+                        'HERMES_MODEL': selected_model,
                         'HERMES_INFERENCE_PROVIDER': HERMES_PROVIDER,
                         'HERMES_TUI_TOOLSETS': HERMES_TUI_TOOLSETS,
                         'PYTHONPATH': os.pathsep.join(
@@ -621,7 +673,7 @@ async def stream_chat_events(payload: ChatRequest, turn_key: str):
                     process,
                     '1',
                     'session.create',
-                    {'cols': 80, 'model': HERMES_MODEL, 'provider': HERMES_PROVIDER},
+                    {'cols': 80, 'model': selected_model, 'provider': HERMES_PROVIDER},
                     notifications,
                     deadline,
                 )
@@ -638,7 +690,7 @@ async def stream_chat_events(payload: ChatRequest, turn_key: str):
                 {
                     'session_id': runtime_session_id,
                     'key': 'model',
-                    'value': f'{HERMES_MODEL} --provider {HERMES_PROVIDER} --session',
+                    'value': f'{selected_model} --provider {HERMES_PROVIDER} --session',
                     'confirm_expensive_model': True,
                 },
                 notifications,
@@ -752,6 +804,7 @@ async def chat_stream(payload: ChatRequest):
         raise HTTPException(status_code=422, detail='Invalid session id')
     if payload.profile not in HERMES_PROFILES:
         raise HTTPException(status_code=422, detail='Profil inconnu.')
+    await resolve_model_async(payload.model)
     payload.message = message
     turn_key = secrets.token_urlsafe(24)
     return StreamingResponse(

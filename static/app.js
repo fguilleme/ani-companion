@@ -469,12 +469,34 @@ function selectProfile(profile){
   currentProfile=profile;
   localStorage.setItem('ani.profile',profile);
   if(profilePicker)profilePicker.hidden=true;
-  refreshContextMeter();
+  refreshContextMeter();refreshModelSelector();
 }
+const modelSelector=document.getElementById('model-selector');
+let modelCatalog=[];
+async function refreshModelSelector(){
+  if(!modelSelector)return;
+  try{
+    const response=await fetch('/api/models');
+    if(response.ok)modelCatalog=(await response.json()).models||[];
+  }catch(_){modelCatalog=[]}
+  if(!modelCatalog.length)modelCatalog=[{id:'ani-gemma4:latest',vision:false}];
+  modelSelector.replaceChildren(...modelCatalog.map(model=>{
+    const option=document.createElement('option');
+    option.value=model.id;
+    option.textContent=model.vision?`${model.id} (vision)`:model.id;
+    return option;
+  }));
+  const saved=localStorage.getItem(`ani.model.${currentProfile}`)||'';
+  if(modelCatalog.some(model=>model.id===saved))modelSelector.value=saved;
+  else if(saved)localStorage.removeItem(`ani.model.${currentProfile}`);
+}
+modelSelector?.addEventListener('change',()=>{
+  if(modelSelector.value)localStorage.setItem(`ani.model.${currentProfile}`,modelSelector.value);
+});
 profilePicker?.querySelectorAll('[data-profile]').forEach(button=>{
   button.addEventListener('click',()=>selectProfile(button.dataset.profile));
 });
-if(!currentProfile)showProfilePicker();
+if(!currentProfile)showProfilePicker();else refreshModelSelector();
 
 form.addEventListener('submit',async event=>{
   event.preventDefault();const message=input.value.trim();if(!message)return;
@@ -495,7 +517,7 @@ form.addEventListener('submit',async event=>{
     }
   },6000);
   try{
-    const response=await fetch('/api/chat/stream',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message,session_id:sessionState.sessionId,turn_id:turnId,profile:currentProfile}),signal:chatController.signal});
+    const response=await fetch('/api/chat/stream',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message,session_id:sessionState.sessionId,turn_id:turnId,profile:currentProfile,model:localStorage.getItem(`ani.model.${currentProfile}`)||null}),signal:chatController.signal});
     if(turnId!==activeTurnId)return;
     if(!response.ok){const data=await response.json();throw new Error(data.detail||'Ani ne répond pas')}
     await readNdjson(response,async event=>{

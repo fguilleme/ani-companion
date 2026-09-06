@@ -11,7 +11,7 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icons/ani-192.png" type="image/png">
   <link rel="apple-touch-icon" href="/icons/ani-192.png">
-  <link rel="stylesheet" href="/style.css?v=31">
+  <link rel="stylesheet" href="/style.css?v=32">
 </head>
 <body>
   <main class="companion-shell">
@@ -29,6 +29,7 @@
       <header class="topbar">
         <div><strong>Ani</strong><span id="status"><i></i> présente</span></div>
         <div class="top-actions">
+          <select id="model-selector" class="model-selector" aria-label="Modèle d’Ani"></select>
           <button id="install-button" class="install-control" type="button" hidden>Installer</button>
         </div>
       </header>
@@ -65,7 +66,7 @@
   <audio id="voice-player" preload="none"></audio>
   <audio id="status-player" preload="none"></audio>
   <script src="/avatar-3d.bundle.js" defer></script>
-  <script src="/app.js?v=34" defer></script>
+  <script src="/app.js?v=35" defer></script>
   <script>if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js'))</script>
 </body>
 </html>
