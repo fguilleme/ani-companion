@@ -540,9 +540,21 @@ cameraButton?.addEventListener('click',()=>{
 });
 screenButton?.addEventListener('click',()=>{
   if(pendingImage){setImagePreview(null);return}
-  if(!navigator.mediaDevices?.getDisplayMedia){bubble('Partage d’écran indisponible ici.','ani');return}
-  captureFrame(()=>navigator.mediaDevices.getDisplayMedia({video:true}),'Regarde mon écran. ');
+  captureAniCanvas();
 });
+function captureAniCanvas(){
+  const canvas=document.getElementById('avatar-canvas');
+  if(!canvas){bubble('Capture indisponible.','ani');return}
+  const out=document.createElement('canvas');
+  const size=720;
+  out.width=size;out.height=Math.round(size*canvas.clientHeight/canvas.clientWidth)||size;
+  const context=out.getContext('2d');
+  context.fillStyle='#100d13';
+  context.fillRect(0,0,out.width,out.height);
+  context.drawImage(canvas,0,0,out.width,out.height);
+  setImagePreview(out.toDataURL('image/jpeg',0.85));
+  if(!input.value.trim())input.value='Regarde-toi. ';
+}
 
 form.addEventListener('submit',async event=>{
   event.preventDefault();const message=input.value.trim();if(!message)return;
