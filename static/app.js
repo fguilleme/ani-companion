@@ -559,6 +559,7 @@ function startCameraView(){
     const width=context.canvas.width||1280,height=context.canvas.height||720;
     const out=document.createElement('canvas');out.width=width;out.height=height;
     out.getContext('2d').drawImage(context.canvas,0,0);
+    playShutterFeedback();
     setImagePreview(out.toDataURL('image/jpeg',0.85));
     stopCameraView();
     if(!input.value.trim())input.value='Regarde-moi. ';
@@ -573,6 +574,25 @@ screenButton?.addEventListener('click',()=>{
   if(pendingImage){setImagePreview(null);return}
   captureAniCanvas();
 });
+function playShutterFeedback(){
+  try{
+    const AudioContext=window.AudioContext||window.webkitAudioContext;
+    const context=new AudioContext();
+    const click=context.createOscillator();
+    const gain=context.createGain();
+    click.type='square';click.frequency.setValueAtTime(1800,context.currentTime);
+    click.frequency.exponentialRampToValueAtTime(500,context.currentTime+.08);
+    gain.gain.setValueAtTime(.12,context.currentTime);
+    gain.gain.exponentialRampToValueAtTime(.0001,context.currentTime+.1);
+    click.connect(gain).connect(context.destination);
+    click.start();click.stop(context.currentTime+.1);
+    setTimeout(()=>context.close(),300);
+  }catch(_){}
+  const flash=document.createElement('div');
+  flash.className='ani-capture-flash';
+  document.body.appendChild(flash);
+  setTimeout(()=>flash.remove(),320);
+}
 function captureAniCanvas(){
   const canvas=document.getElementById('avatar-canvas');
   if(!canvas){bubble('Capture indisponible.','ani');return}
@@ -583,6 +603,7 @@ function captureAniCanvas(){
   context.fillStyle='#100d13';
   context.fillRect(0,0,out.width,out.height);
   context.drawImage(canvas,0,0,out.width,out.height);
+  playShutterFeedback();
   setImagePreview(out.toDataURL('image/jpeg',0.85));
   if(!input.value.trim())input.value='Regarde-toi. ';
 }

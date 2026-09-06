@@ -9,7 +9,7 @@ const MAX_MOUTH_OPEN = 0.40;
 const canvas = document.getElementById('avatar-canvas');
 const loading = document.getElementById('avatar-loading');
 const container = document.getElementById('ani-avatar');
-const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true, powerPreference: 'high-performance' });
+const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true, powerPreference: 'high-performance', preserveDrawingBuffer: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;

@@ -508,6 +508,13 @@ class AniCompanionTests(unittest.TestCase):
         css = (ROOT / 'static' / 'style.css').read_text()
         self.assertIn('#ani-camera-view', css)
 
+    def test_capture_gives_flash_and_shutter_feedback(self):
+        script = (ROOT / 'static' / 'app.js').read_text()
+        self.assertIn('playShutterFeedback', script)
+        self.assertIn('ani-capture-flash', script)
+        avatar_source = (ROOT / 'src' / 'avatar-3d.js').read_text()
+        self.assertIn('preserveDrawingBuffer: true', avatar_source)
+
     def test_gateway_deadline_is_not_reset_by_malformed_output(self):
         class NoisyStdout:
             async def readline(self):
@@ -801,7 +808,7 @@ class AniCompanionTests(unittest.TestCase):
 
     def test_service_worker_precaches_avatar_runtime(self):
         worker = (ROOT / 'static' / 'sw.js').read_text()
-        self.assertIn("const CACHE='ani-companion-v38'", worker)
+        self.assertIn("const CACHE='ani-companion-v39'", worker)
         self.assertIn("'/avatar-3d.bundle.js'", worker)
 
     def test_service_worker_activates_pipeline_update_immediately(self):
@@ -814,9 +821,9 @@ class AniCompanionTests(unittest.TestCase):
         html = (ROOT / 'static' / 'index.html').read_text()
         worker = (ROOT / 'static' / 'sw.js').read_text()
         self.assertIn('href="/style.css?v=33"', html)
-        self.assertIn('src="/app.js?v=38"', html)
+        self.assertIn('src="/app.js?v=39"', html)
         self.assertIn("'/style.css?v=33'", worker)
-        self.assertIn("'/app.js?v=38'", worker)
+        self.assertIn("'/app.js?v=39'", worker)
 
     def test_phase_timer_does_not_flood_accessibility_announcements(self):
         html = (ROOT / 'static' / 'index.html').read_text()
