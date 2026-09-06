@@ -610,6 +610,50 @@ async def _stop_gateway_process(
         await process.wait()
 
 
+def _clear_stale_turn_lease(session_id: str) -> None:
+    """Remove leftover session-turn leases whose holder process is dead. /api/cancel SIGKILLs the
+    gateway process mid-turn, which orphans its DB lease for up to LEASE_TTL (5 min); the next
+    turn then blocks on the lease and fails with 'another Hermes process'."""
+    if not session_id or not SESSION_RE.fullmatch(session_id):
+        return
+    db_path = Path(HERMES_HOME) / 'state.db'
+    if not db_path.is_file():
+        return
+    try:
+        import sqlite3
+
+        connection = sqlite3.connect(db_path, timeout=2)
+        try:
+            rows = connection.execute(
+                'SELECT holder FROM session_turn_leases WHERE conversation_id = ?',
+                (session_id,),
+            ).fetchall()
+            stale = []
+            for (holder,) in rows:
+                match = re.match(r'pid=(\d+)', str(holder))
+                if not match:
+                    continue
+                pid = int(match.group(1))
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    stale.append((session_id, holder))
+                except PermissionError:
+                    continue  # holder alive, not ours
+            for args in stale:
+                connection.execute(
+                    'DELETE FROM session_turn_leases WHERE conversation_id = ? AND holder = ?',
+                    args,
+                )
+            if stale:
+                connection.commit()
+                logger.info('Cleared %d stale session turn lease(s) for %s', len(stale), session_id)
+        finally:
+            connection.close()
+    except Exception:
+        logger.debug('Stale lease cleanup skipped', exc_info=True)
+
+
 async def stream_chat_events(payload: ChatRequest, turn_key: str):
     process = None
     stderr_task = None
@@ -621,6 +665,7 @@ async def stream_chat_events(payload: ChatRequest, turn_key: str):
     deadline = asyncio.get_running_loop().time() + CHAT_TIMEOUT_SECONDS
     profile_home = HERMES_PROFILES.get(payload.profile, HERMES_PROFILES[DEFAULT_PROFILE])
     selected_model = await resolve_model_async(payload.model)
+    await asyncio.to_thread(_clear_stale_turn_lease, payload.session_id or '')
     try:
         async with _semaphore_before_deadline(RUN_SEMAPHORE, deadline):
             process = await asyncio.wait_for(
@@ -705,6 +750,11 @@ async def stream_chat_events(payload: ChatRequest, turn_key: str):
                 deadline,
             )
             if submitted.get('status') != 'streaming':
+                logger.warning(
+                    'Submit did not stream: status=%r result_keys=%s',
+                    submitted.get('status'),
+                    sorted(submitted.keys()),
+                )
                 raise RuntimeError('Hermes did not start streaming')
 
             while True:

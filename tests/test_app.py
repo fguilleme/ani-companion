@@ -444,6 +444,16 @@ class AniCompanionTests(unittest.TestCase):
         self.assertIn("message='La réponse locale d’Ani a échoué.'", source)
         self.assertIn("logger.exception('Hermes streaming failed')", source)
 
+    def test_cancelled_turns_clear_stale_session_leases(self):
+        source = (ROOT / 'app.py').read_text()
+        self.assertIn('def _clear_stale_turn_lease', source)
+        self.assertIn('_clear_stale_turn_lease, payload.session_id', source)
+        self.assertIn('ProcessLookupError', source)
+
+    def test_failed_submits_log_their_status_for_diagnosis(self):
+        source = (ROOT / 'app.py').read_text()
+        self.assertIn("'Submit did not stream: status=%r result_keys=%s'", source)
+
     def test_gateway_deadline_is_not_reset_by_malformed_output(self):
         class NoisyStdout:
             async def readline(self):
