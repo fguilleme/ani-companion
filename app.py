@@ -664,7 +664,7 @@ async def stream_chat_events(payload: ChatRequest, turn_key: str):
                     process,
                     '1',
                     'session.resume',
-                    {'session_id': payload.session_id, 'omit_messages': True},
+                    {'session_id': payload.session_id, 'omit_messages': True, 'eager_build': True},
                     notifications,
                     deadline,
                 )

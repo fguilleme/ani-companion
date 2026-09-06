@@ -812,6 +812,10 @@ class AniCompanionTests(unittest.TestCase):
         })
         self.assertEqual(response.status_code, 422)
 
+    def test_resumed_sessions_request_eager_agent_build_for_live_model_switch(self):
+        source = (ROOT / 'app.py').read_text()
+        self.assertIn("'eager_build': True", source)
+
     def test_chat_stream_accepts_vision_model_from_catalog(self):
         client = TestClient(app)
         response = client.post('/api/chat/stream', json={
