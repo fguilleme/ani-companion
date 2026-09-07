@@ -844,6 +844,9 @@ class AniCompanionTests(unittest.TestCase):
         source = (ROOT / 'src' / 'avatar-3d.js').read_text()
         self.assertIn("['dance', 'spin', 'jump'].includes(name)", source)
         self.assertIn('const fullBodySpan = Math.max(size.y', source)
+        self.assertIn('ACTION_CAMERA_VERTICAL_OFFSET = 0.25', source)
+        self.assertIn('center.y + ACTION_CAMERA_VERTICAL_OFFSET', source)
+        self.assertIn('fullBodySpan + 2 * ACTION_CAMERA_VERTICAL_OFFSET', source)
         self.assertIn('camera.position.lerp(actionCameraPosition', source)
         self.assertIn('camera.fov = THREE.MathUtils.lerp(camera.fov, actionCameraFov', source)
 
@@ -884,8 +887,8 @@ class AniCompanionTests(unittest.TestCase):
 
     def test_service_worker_precaches_avatar_runtime(self):
         worker = (ROOT / 'static' / 'sw.js').read_text()
-        self.assertIn("const CACHE='ani-companion-v47'", worker)
-        self.assertIn("'/avatar-3d.bundle.js?v=47'", worker)
+        self.assertIn("const CACHE='ani-companion-v48'", worker)
+        self.assertIn("'/avatar-3d.bundle.js?v=48'", worker)
 
     def test_service_worker_activates_pipeline_update_immediately(self):
         worker = (ROOT / 'static' / 'sw.js').read_text()
@@ -898,7 +901,7 @@ class AniCompanionTests(unittest.TestCase):
         worker = (ROOT / 'static' / 'sw.js').read_text()
         self.assertIn('href="/style.css?v=33"', html)
         self.assertIn('src="/app.js?v=42"', html)
-        self.assertIn('src="/avatar-3d.bundle.js?v=47"', html)
+        self.assertIn('src="/avatar-3d.bundle.js?v=48"', html)
         self.assertIn("'/style.css?v=33'", worker)
         self.assertIn("'/app.js?v=42'", worker)
 

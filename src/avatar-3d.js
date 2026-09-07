@@ -7,6 +7,7 @@ const UPPER_BODY_HEIGHT_RATIO = 0.38;
 const UPPER_BODY_VERTICAL_OFFSET = 0.2;
 const UPPER_BODY_FRAME_MARGIN = 1.02;
 const FULL_BODY_FRAME_MARGIN = 1.18;
+const ACTION_CAMERA_VERTICAL_OFFSET = 0.25;
 const MAX_MOUTH_OPEN = 0.40;
 
 const canvas = document.getElementById('avatar-canvas');
@@ -151,9 +152,9 @@ function frameModel(model) {
 
   const actionDistance = 2;
   const fullBodySpan = Math.max(size.y, size.x / Math.max(camera.aspect, 0.25));
-  actionCameraTarget.copy(center);
-  actionCameraPosition.set(center.x, center.y, center.z + actionDistance);
-  actionCameraFov = fittedVerticalFov(fullBodySpan, actionDistance, FULL_BODY_FRAME_MARGIN);
+  actionCameraTarget.set(center.x, center.y + ACTION_CAMERA_VERTICAL_OFFSET, center.z);
+  actionCameraPosition.set(center.x, center.y + ACTION_CAMERA_VERTICAL_OFFSET, center.z + actionDistance);
+  actionCameraFov = fittedVerticalFov(fullBodySpan + 2 * ACTION_CAMERA_VERTICAL_OFFSET, actionDistance, FULL_BODY_FRAME_MARGIN);
 
   camera.position.copy(defaultCameraPosition);
   camera.fov = defaultCameraFov;
