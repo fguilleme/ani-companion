@@ -3,7 +3,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
 
-const UPPER_BODY_HEIGHT_RATIO = 0.25;
+const UPPER_BODY_HEIGHT_RATIO = 0.38;
 const UPPER_BODY_FRAME_MARGIN = 1.02;
 const FULL_BODY_FRAME_MARGIN = 1.18;
 const MAX_MOUTH_OPEN = 0.40;

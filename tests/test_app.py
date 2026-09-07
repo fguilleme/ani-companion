@@ -702,7 +702,7 @@ class AniCompanionTests(unittest.TestCase):
 
     def test_avatar_camera_uses_upper_body_framing(self):
         source = (ROOT / 'src' / 'avatar-3d.js').read_text()
-        self.assertIn('UPPER_BODY_HEIGHT_RATIO = 0.25', source)
+        self.assertIn('UPPER_BODY_HEIGHT_RATIO = 0.38', source)
 
     def test_avatar_supports_touch_orbit_zoom_and_auto_return(self):
         source = (ROOT / 'src' / 'avatar-3d.js').read_text()
@@ -882,8 +882,8 @@ class AniCompanionTests(unittest.TestCase):
 
     def test_service_worker_precaches_avatar_runtime(self):
         worker = (ROOT / 'static' / 'sw.js').read_text()
-        self.assertIn("const CACHE='ani-companion-v45'", worker)
-        self.assertIn("'/avatar-3d.bundle.js'", worker)
+        self.assertIn("const CACHE='ani-companion-v46'", worker)
+        self.assertIn("'/avatar-3d.bundle.js?v=46'", worker)
 
     def test_service_worker_activates_pipeline_update_immediately(self):
         worker = (ROOT / 'static' / 'sw.js').read_text()
@@ -896,6 +896,7 @@ class AniCompanionTests(unittest.TestCase):
         worker = (ROOT / 'static' / 'sw.js').read_text()
         self.assertIn('href="/style.css?v=33"', html)
         self.assertIn('src="/app.js?v=42"', html)
+        self.assertIn('src="/avatar-3d.bundle.js?v=46"', html)
         self.assertIn("'/style.css?v=33'", worker)
         self.assertIn("'/app.js?v=42'", worker)
 
