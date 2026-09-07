@@ -700,9 +700,9 @@ class AniCompanionTests(unittest.TestCase):
         self.assertIn('autocorrect="off"', html)
         self.assertIn('spellcheck="false"', html)
 
-    def test_avatar_camera_uses_half_body_framing(self):
+    def test_avatar_camera_uses_upper_body_framing(self):
         source = (ROOT / 'src' / 'avatar-3d.js').read_text()
-        self.assertIn('HEAD_SHOT_HEIGHT_RATIO = 0.23', source)
+        self.assertIn('UPPER_BODY_HEIGHT_RATIO = 0.25', source)
 
     def test_avatar_supports_touch_orbit_zoom_and_auto_return(self):
         source = (ROOT / 'src' / 'avatar-3d.js').read_text()
@@ -838,12 +838,12 @@ class AniCompanionTests(unittest.TestCase):
             self.assertIn(motion, source)
         self.assertIn('window.aniAvatar = { setEmotion, setMouthOpen, playMotion', source)
 
-    def test_large_avatar_motions_use_knee_to_head_camera_framing(self):
+    def test_large_avatar_motions_use_full_body_camera_framing(self):
         source = (ROOT / 'src' / 'avatar-3d.js').read_text()
         self.assertIn("['dance', 'spin', 'jump'].includes(name)", source)
-        self.assertIn("getNormalizedBoneNode('leftLowerLeg')", source)
+        self.assertIn('const fullBodySpan = Math.max(size.y', source)
         self.assertIn('camera.position.lerp(actionCameraPosition', source)
-        self.assertIn('controls.target.lerp(actionCameraTarget', source)
+        self.assertIn('camera.fov = THREE.MathUtils.lerp(camera.fov, actionCameraFov', source)
 
     def test_reply_cues_can_trigger_avatar_motions(self):
         script = (ROOT / 'static' / 'app.js').read_text()
@@ -882,7 +882,7 @@ class AniCompanionTests(unittest.TestCase):
 
     def test_service_worker_precaches_avatar_runtime(self):
         worker = (ROOT / 'static' / 'sw.js').read_text()
-        self.assertIn("const CACHE='ani-companion-v44'", worker)
+        self.assertIn("const CACHE='ani-companion-v45'", worker)
         self.assertIn("'/avatar-3d.bundle.js'", worker)
 
     def test_service_worker_activates_pipeline_update_immediately(self):

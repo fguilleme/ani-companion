@@ -3,7 +3,9 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
 
-const HEAD_SHOT_HEIGHT_RATIO = 0.23;
+const UPPER_BODY_HEIGHT_RATIO = 0.25;
+const UPPER_BODY_FRAME_MARGIN = 1.02;
+const FULL_BODY_FRAME_MARGIN = 1.18;
 const MAX_MOUTH_OPEN = 0.40;
 
 const canvas = document.getElementById('avatar-canvas');
@@ -52,6 +54,8 @@ const defaultCameraPosition = new THREE.Vector3();
 const defaultCameraTarget = new THREE.Vector3();
 const actionCameraPosition = new THREE.Vector3();
 const actionCameraTarget = new THREE.Vector3();
+let defaultCameraFov = camera.fov;
+let actionCameraFov = camera.fov;
 const baseAvatarPosition = new THREE.Vector3();
 const baseAvatarRotation = new THREE.Euler();
 const idleBones = {};
@@ -126,30 +130,35 @@ function poseNaturally(model) {
   }
 }
 
+function fittedVerticalFov(verticalSpan, distance, margin) {
+  const radians = 2 * Math.atan((verticalSpan * margin) / (2 * distance));
+  return THREE.MathUtils.clamp(THREE.MathUtils.radToDeg(radians), 20, 82);
+}
+
 function frameModel(model) {
+  model.scene.updateMatrixWorld(true);
   const box = new THREE.Box3().setFromObject(model.scene);
   const size = box.getSize(new THREE.Vector3());
   const center = box.getCenter(new THREE.Vector3());
-  const visibleHeight = size.y * HEAD_SHOT_HEIGHT_RATIO;
-  const targetY = box.max.y - visibleHeight * 0.48;
-  const distance = 1;
-  defaultCameraTarget.set(center.x, targetY, center.z);
-  defaultCameraPosition.set(center.x, targetY, center.z + distance);
 
-  model.scene.updateMatrixWorld(true);
-  const leftKnee = model.humanoid?.getNormalizedBoneNode('leftLowerLeg');
-  const rightKnee = model.humanoid?.getNormalizedBoneNode('rightLowerLeg');
-  const kneePositions = [leftKnee, rightKnee].filter(Boolean).map(node => node.getWorldPosition(new THREE.Vector3()).y);
-  const kneeY = kneePositions.length ? kneePositions.reduce((sum, value) => sum + value, 0) / kneePositions.length : box.min.y + size.y * 0.24;
-  const actionHeight = Math.max(size.y * 0.55, box.max.y - kneeY);
-  const actionTargetY = kneeY + actionHeight * 0.5;
+  const upperBodyHeight = size.y * UPPER_BODY_HEIGHT_RATIO;
+  const upperTargetY = box.max.y - upperBodyHeight * 0.5;
+  const defaultDistance = 1;
+  defaultCameraTarget.set(center.x, upperTargetY, center.z);
+  defaultCameraPosition.set(center.x, upperTargetY, center.z + defaultDistance);
+  defaultCameraFov = fittedVerticalFov(upperBodyHeight, defaultDistance, UPPER_BODY_FRAME_MARGIN);
+
   const actionDistance = 2;
-  actionCameraTarget.set(center.x, actionTargetY, center.z);
-  actionCameraPosition.set(center.x, actionTargetY, center.z + actionDistance);
+  const fullBodySpan = Math.max(size.y, size.x / Math.max(camera.aspect, 0.25));
+  actionCameraTarget.copy(center);
+  actionCameraPosition.set(center.x, center.y, center.z + actionDistance);
+  actionCameraFov = fittedVerticalFov(fullBodySpan, actionDistance, FULL_BODY_FRAME_MARGIN);
 
   camera.position.copy(defaultCameraPosition);
+  camera.fov = defaultCameraFov;
+  camera.updateProjectionMatrix();
   controls.target.copy(defaultCameraTarget);
-  controls.minDistance = distance * 0.72;
+  controls.minDistance = defaultDistance * 0.72;
   controls.maxDistance = actionDistance * 1.15;
   controls.update();
   lookTarget.position.set(camera.position.x, box.max.y - size.y * 0.11, camera.position.z);
@@ -445,13 +454,19 @@ renderer.setAnimationLoop(() => {
     const blend = 1 - Math.exp(-delta * 1.6);
     camera.position.lerp(actionCameraPosition, blend);
     controls.target.lerp(actionCameraTarget, blend);
+    camera.fov = THREE.MathUtils.lerp(camera.fov, actionCameraFov, blend);
+    camera.updateProjectionMatrix();
   } else if (cameraReturning) {
     const blend = 1 - Math.exp(-delta * 1.6);
     camera.position.lerp(defaultCameraPosition, blend);
     controls.target.lerp(defaultCameraTarget, blend);
-    if (camera.position.distanceTo(defaultCameraPosition) < 0.002 && controls.target.distanceTo(defaultCameraTarget) < 0.002) {
+    camera.fov = THREE.MathUtils.lerp(camera.fov, defaultCameraFov, blend);
+    camera.updateProjectionMatrix();
+    if (camera.position.distanceTo(defaultCameraPosition) < 0.002 && controls.target.distanceTo(defaultCameraTarget) < 0.002 && Math.abs(camera.fov - defaultCameraFov) < 0.02) {
       camera.position.copy(defaultCameraPosition);
       controls.target.copy(defaultCameraTarget);
+      camera.fov = defaultCameraFov;
+      camera.updateProjectionMatrix();
       cameraReturning = false;
     }
   }
@@ -479,6 +494,29 @@ function getCameraState() {
   return { position: camera.position.toArray(), target: controls.target.toArray() };
 }
 
+function getFramingState() {
+  if (!vrm) return { mode: 'loading', fov: camera.fov, boundsNdc: null };
+  vrm.scene.updateMatrixWorld(true);
+  camera.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(vrm.scene);
+  const points = [];
+  for (const x of [box.min.x, box.max.x]) {
+    for (const y of [box.min.y, box.max.y]) {
+      for (const z of [box.min.z, box.max.z]) points.push(new THREE.Vector3(x, y, z).project(camera));
+    }
+  }
+  return {
+    mode: motionCameraActive ? 'full-body' : 'upper-body',
+    fov: camera.fov,
+    boundsNdc: {
+      minX: Math.min(...points.map(point => point.x)),
+      maxX: Math.max(...points.map(point => point.x)),
+      minY: Math.min(...points.map(point => point.y)),
+      maxY: Math.max(...points.map(point => point.y)),
+    },
+  };
+}
+
 function getAnimationState() {
   const values = {};
   for (const name of moodExpressions) values[name] = vrm?.expressionManager?.getValue(name) || 0;
@@ -490,4 +528,4 @@ function getAnimationState() {
   };
 }
 
-window.aniAvatar = { setEmotion, setMouthOpen, playMotion, reactToTouch, getCameraState, getAnimationState };
+window.aniAvatar = { setEmotion, setMouthOpen, playMotion, reactToTouch, getCameraState, getFramingState, getAnimationState };

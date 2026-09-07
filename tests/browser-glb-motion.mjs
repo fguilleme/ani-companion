@@ -25,15 +25,22 @@ try {
   page.on('pageerror', error => errors.push(error.message));
   await page.goto('http://127.0.0.1:8796/', { waitUntil: 'networkidle' });
   await page.waitForFunction(() => window.aniAvatar?.getAnimationState().ready, null, { timeout: 30000 });
-  const initial = await page.evaluate(() => ({ camera: window.aniAvatar.getCameraState(), animation: window.aniAvatar.getAnimationState() }));
+  const initial = await page.evaluate(() => ({ camera: window.aniAvatar.getCameraState(), animation: window.aniAvatar.getAnimationState(), framing: window.aniAvatar.getFramingState() }));
   const initialDistance = distance(initial.camera.position, initial.camera.target);
   if (initialDistance < 0.98 || initialDistance > 1.02) fail(`La caméra initiale n’est pas à un mètre: ${initialDistance}`);
+  if (initial.framing.mode !== 'upper-body' || initial.framing.boundsNdc.minY >= -1) fail(`La pose initiale n’est pas cadrée upper body: ${JSON.stringify(initial.framing)}`);
+  await page.locator('#avatar-canvas').screenshot({ path: '/tmp/melissa-upper-body.png' });
   if (!await page.evaluate(() => window.aniAvatar.playMotion('dance'))) fail('Danse GLB refusée');
   await page.waitForTimeout(3300);
-  const during = await page.evaluate(() => ({ animation: window.aniAvatar.getAnimationState(), camera: window.aniAvatar.getCameraState() }));
+  const during = await page.evaluate(() => ({ animation: window.aniAvatar.getAnimationState(), camera: window.aniAvatar.getCameraState(), framing: window.aniAvatar.getFramingState() }));
   if (during.animation.activeMotion !== 'dance') fail(`Danse GLB trop courte: ${JSON.stringify(during.animation)}`);
   const actionDistance = distance(during.camera.position, during.camera.target);
   if (actionDistance < 1.9 || actionDistance > 2.02) fail(`La caméra d’animation n’est pas à deux mètres: ${actionDistance}`);
+  const bounds = during.framing.boundsNdc;
+  if (during.framing.mode !== 'full-body' || bounds.minX < -1 || bounds.maxX > 1 || bounds.minY < -1 || bounds.maxY > 1) {
+    fail(`L’animation n’est pas cadrée full body: ${JSON.stringify(during.framing)}`);
+  }
+  await page.locator('#avatar-canvas').screenshot({ path: '/tmp/melissa-full-body.png' });
   await page.waitForFunction(position => {
     const current = window.aniAvatar.getCameraState().position;
     return Math.sqrt(current.reduce((sum, value, index) => sum + (value - position[index]) ** 2, 0)) <= 0.03;
@@ -45,6 +52,7 @@ try {
   if (final.animation.activeClip !== null) fail(`Le clip GLB laisse l’avatar dans sa pose finale: ${JSON.stringify(final.animation)}`);
   if (distance(initial.animation.avatarPosition, final.animation.avatarPosition) > 0.001) fail('La position de l’avatar n’est pas restaurée');
   if (distance(initial.animation.avatarRotation, final.animation.avatarRotation) > 0.001) fail('La rotation de l’avatar n’est pas restaurée');
+  await page.locator('#avatar-canvas').screenshot({ path: '/tmp/melissa-upper-body-returned.png' });
   if (errors.length) fail(`Erreurs navigateur: ${errors.join(' | ')}`);
   console.log(JSON.stringify({ ok: true, avatar: 'Melissa.glb', initialDistance, actionDistance, returnedPosition, returnedTarget }));
 } finally {
