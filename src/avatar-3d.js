@@ -4,6 +4,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
 
 const UPPER_BODY_HEIGHT_RATIO = 0.38;
+const UPPER_BODY_VERTICAL_OFFSET = 0.2;
 const UPPER_BODY_FRAME_MARGIN = 1.02;
 const FULL_BODY_FRAME_MARGIN = 1.18;
 const MAX_MOUTH_OPEN = 0.40;
@@ -144,8 +145,8 @@ function frameModel(model) {
   const upperBodyHeight = size.y * UPPER_BODY_HEIGHT_RATIO;
   const upperTargetY = box.max.y - upperBodyHeight * 0.5;
   const defaultDistance = 1;
-  defaultCameraTarget.set(center.x, upperTargetY, center.z);
-  defaultCameraPosition.set(center.x, upperTargetY, center.z + defaultDistance);
+  defaultCameraTarget.set(center.x, upperTargetY + UPPER_BODY_VERTICAL_OFFSET, center.z);
+  defaultCameraPosition.set(center.x, upperTargetY + UPPER_BODY_VERTICAL_OFFSET, center.z + defaultDistance);
   defaultCameraFov = fittedVerticalFov(upperBodyHeight, defaultDistance, UPPER_BODY_FRAME_MARGIN);
 
   const actionDistance = 2;
