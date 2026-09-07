@@ -83,6 +83,9 @@ try {
     fail(`Avatar non prêt: ${JSON.stringify(consoleErrors)}`);
   }
 
+  const titleState = await page.evaluate(() => ({ heading: document.querySelector('.topbar strong')?.textContent, title: document.title, phase: document.querySelector('.phase-label')?.textContent }));
+  if (titleState.heading !== 'Ani' || titleState.title !== 'Ani') fail(`Le nom de l’avatar sélectionné n’est pas utilisé: ${JSON.stringify(titleState)}`);
+
   const canvas = await page.locator('#avatar-canvas').boundingBox();
   if (!canvas || canvas.width < 300 || canvas.height < 300) fail(`Canvas avatar trop petit: ${JSON.stringify(canvas)}`);
 

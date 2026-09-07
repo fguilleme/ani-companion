@@ -4,7 +4,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
 
 const UPPER_BODY_HEIGHT_RATIO = 0.38;
-const UPPER_BODY_VERTICAL_OFFSET = 0.2;
+const UPPER_BODY_VERTICAL_OFFSET = 0.1;
 const UPPER_BODY_FRAME_MARGIN = 1.02;
 const FULL_BODY_FRAME_MARGIN = 1.18;
 const ACTION_CAMERA_VERTICAL_OFFSET = 0.25;
@@ -21,6 +21,7 @@ renderer.toneMappingExposure = 0.82;
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(28, 1, 0.01, 100);
+scene.add(camera);
 const clock = new THREE.Clock();
 const controls = new OrbitControls(camera, canvas);
 controls.enableDamping = true;
@@ -31,14 +32,16 @@ controls.zoomSpeed = 0.75;
 controls.minPolarAngle = Math.PI * 0.32;
 controls.maxPolarAngle = Math.PI * 0.68;
 const lookTarget = new THREE.Object3D();
-scene.add(lookTarget);
+const lightTarget = new THREE.Object3D();
+scene.add(lookTarget, lightTarget);
 scene.add(new THREE.HemisphereLight(0xd8e4f0, 0x171523, 1.25));
 const keyLight = new THREE.DirectionalLight(0xe4e8f2, 1.45);
 keyLight.position.set(1.8, 2.8, 2.6);
-scene.add(keyLight);
+keyLight.target = lightTarget;
 const rimLight = new THREE.DirectionalLight(0x5579a8, 0.75);
 rimLight.position.set(-2, 2, -1.5);
-scene.add(rimLight);
+rimLight.target = lightTarget;
+camera.add(keyLight, rimLight);
 
 let vrm = null;
 let mouthOpen = 0;
@@ -473,6 +476,7 @@ renderer.setAnimationLoop(() => {
     }
   }
   controls.update();
+  lightTarget.position.copy(controls.target);
   if (vrm) {
     updateBlink(elapsed);
     updateMouth(elapsed);
@@ -494,6 +498,15 @@ renderer.setAnimationLoop(() => {
 
 function getCameraState() {
   return { position: camera.position.toArray(), target: controls.target.toArray() };
+}
+
+function getLightingState() {
+  scene.updateMatrixWorld(true);
+  return {
+    key: keyLight.getWorldPosition(new THREE.Vector3()).toArray(),
+    rim: rimLight.getWorldPosition(new THREE.Vector3()).toArray(),
+    target: lightTarget.getWorldPosition(new THREE.Vector3()).toArray(),
+  };
 }
 
 function getFramingState() {
@@ -530,4 +543,4 @@ function getAnimationState() {
   };
 }
 
-window.aniAvatar = { setEmotion, setMouthOpen, playMotion, reactToTouch, getCameraState, getFramingState, getAnimationState };
+window.aniAvatar = { setEmotion, setMouthOpen, playMotion, reactToTouch, getCameraState, getLightingState, getFramingState, getAnimationState };

@@ -703,8 +703,14 @@ class AniCompanionTests(unittest.TestCase):
     def test_avatar_camera_uses_upper_body_framing(self):
         source = (ROOT / 'src' / 'avatar-3d.js').read_text()
         self.assertIn('UPPER_BODY_HEIGHT_RATIO = 0.38', source)
-        self.assertIn('UPPER_BODY_VERTICAL_OFFSET = 0.2', source)
+        self.assertIn('UPPER_BODY_VERTICAL_OFFSET = 0.1', source)
         self.assertIn('upperTargetY + UPPER_BODY_VERTICAL_OFFSET', source)
+
+    def test_avatar_lighting_follows_camera_and_action_target(self):
+        source = (ROOT / 'src' / 'avatar-3d.js').read_text()
+        self.assertIn('camera.add(keyLight, rimLight)', source)
+        self.assertIn('lightTarget.position.copy(controls.target)', source)
+        self.assertIn('getLightingState', source)
 
     def test_avatar_supports_touch_orbit_zoom_and_auto_return(self):
         source = (ROOT / 'src' / 'avatar-3d.js').read_text()
@@ -867,11 +873,18 @@ class AniCompanionTests(unittest.TestCase):
     def test_phase_indicator_distinguishes_waiting_from_streaming_reply(self):
         script = (ROOT / 'static' / 'app.js').read_text()
         css = (ROOT / 'static' / 'style.css').read_text()
-        self.assertIn("llm:'Ani réfléchit'", script)
-        self.assertIn("answering:'Ani répond'", script)
+        self.assertIn("llm:`${avatarName()} réfléchit`", script)
+        self.assertIn("answering:`${avatarName()} répond`", script)
+        self.assertIn('document.title=name', script)
         self.assertIn("setPhase('answering')", script)
         self.assertIn('.phase-indicator[data-phase="answering"]', css)
         self.assertIn('animation:phase-answer', css)
+
+    def test_voice_selector_only_lists_female_qwen_voices(self):
+        script = (ROOT / 'static' / 'app.js').read_text()
+        self.assertIn("const QWEN_VOICES=['Vivian','Serena','Chelsie','Cherry','Nuna','Sofia']", script)
+        for voice in ('Ethan', 'Ryan', 'Aiden'):
+            self.assertNotIn(f"'{voice}'", script)
 
     def test_local_stt_endpoint_returns_whisper_transcript(self):
         client = TestClient(app)
@@ -887,8 +900,8 @@ class AniCompanionTests(unittest.TestCase):
 
     def test_service_worker_precaches_avatar_runtime(self):
         worker = (ROOT / 'static' / 'sw.js').read_text()
-        self.assertIn("const CACHE='ani-companion-v48'", worker)
-        self.assertIn("'/avatar-3d.bundle.js?v=48'", worker)
+        self.assertIn("const CACHE='ani-companion-v49'", worker)
+        self.assertIn("'/avatar-3d.bundle.js?v=49'", worker)
 
     def test_service_worker_activates_pipeline_update_immediately(self):
         worker = (ROOT / 'static' / 'sw.js').read_text()
@@ -900,10 +913,10 @@ class AniCompanionTests(unittest.TestCase):
         html = (ROOT / 'static' / 'index.html').read_text()
         worker = (ROOT / 'static' / 'sw.js').read_text()
         self.assertIn('href="/style.css?v=33"', html)
-        self.assertIn('src="/app.js?v=42"', html)
-        self.assertIn('src="/avatar-3d.bundle.js?v=48"', html)
+        self.assertIn('src="/app.js?v=43"', html)
+        self.assertIn('src="/avatar-3d.bundle.js?v=49"', html)
         self.assertIn("'/style.css?v=33'", worker)
-        self.assertIn("'/app.js?v=42'", worker)
+        self.assertIn("'/app.js?v=43'", worker)
 
     def test_phase_timer_does_not_flood_accessibility_announcements(self):
         html = (ROOT / 'static' / 'index.html').read_text()

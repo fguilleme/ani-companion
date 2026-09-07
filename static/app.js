@@ -25,6 +25,7 @@ localStorage.setItem('ani.session.generation',SESSION_GENERATION);
 }
 let voiceEnabled=localStorage.getItem('ani.voice')!=='off';
 let persona={display_name:'Ani',avatar:null,voice:null};
+let selectedAvatarName='';
 let deferredInstall=null;
 
 function setEmotion(emotion='neutral'){
@@ -133,15 +134,25 @@ const STATUS_PHRASES={
 };
 const lastStatusPhrase={};
 
+function avatarName(){return selectedAvatarName||persona.display_name||'Ani'}
+function updateAvatarIdentity(name=avatarName()){
+  selectedAvatarName=(name||'Ani').trim()||'Ani';
+  name=selectedAvatarName;
+  const nameElement=document.querySelector('.topbar strong');
+  if(nameElement)nameElement.textContent=selectedAvatarName;
+  document.title=name;
+  setPhase(phaseIndicator.dataset.phase||'idle');
+}
 function renderPhaseTime(){
   const seconds=Math.max(0,Math.floor((performance.now()-phaseStartedAt)/1000));
   phaseTime.textContent=`${String(Math.floor(seconds/60)).padStart(2,'0')}:${String(seconds%60).padStart(2,'0')}`;
 }
 function setPhase(phase='idle'){
-  const labels={idle:'Prête',transcription:'Transcription',llm:'Ani réfléchit',answering:'Ani répond',compression:'Compression'};
-  if(phaseIndicator.dataset.phase===phase)return;
+  const labels={idle:'Prête',transcription:'Transcription',llm:`${avatarName()} réfléchit`,answering:`${avatarName()} répond`,compression:`${avatarName()} organise ses souvenirs`};
+  const changed=phaseIndicator.dataset.phase!==phase;
   phaseIndicator.dataset.phase=phase;phaseLabel.textContent=labels[phase]||phase;
   phaseIndicator.setAttribute('aria-label',labels[phase]||phase);
+  if(!changed)return;
   phaseStartedAt=performance.now();renderPhaseTime();clearInterval(phaseClock);phaseClock=null;
   if(phase!=='idle')phaseClock=setInterval(renderPhaseTime,250);
 }
@@ -498,7 +509,7 @@ modelSelector?.addEventListener('change',()=>{
 });
 const avatarSelector=document.getElementById('avatar-selector');
 const voiceSelector=document.getElementById('voice-selector');
-const QWEN_VOICES=['Vivian','Serena','Chelsie','Cherry','Ethan','Nuna','Ryan','Aiden','Sofia'];
+const QWEN_VOICES=['Vivian','Serena','Chelsie','Cherry','Nuna','Sofia'];
 async function refreshAvatarSelector(){
   if(!avatarSelector)return;
   let catalog=[];let personaMap={};
@@ -520,9 +531,13 @@ async function refreshAvatarSelector(){
     option.textContent=personaMap[model.id]||model.label;
     return option;
   }));
-  const saved=localStorage.getItem(`ani.avatar.${currentProfile}`)||'ani.vrm';
+  const saved=localStorage.getItem(`ani.avatar.${currentProfile}`)||persona.avatar||catalog[0].id;
   if(catalog.some(model=>model.id===saved))avatarSelector.value=saved;
-  else avatarSelector.value='ani.vrm';
+  else{
+    localStorage.removeItem(`ani.avatar.${currentProfile}`);
+    avatarSelector.value=catalog[0].id;
+  }
+  updateAvatarIdentity(avatarSelector.selectedOptions[0]?.textContent||persona.display_name);
 }
 avatarSelector?.addEventListener('change',()=>{
   if(!avatarSelector.value)return;
@@ -537,8 +552,11 @@ function refreshVoiceSelector(){
     option.value=voice;option.textContent=voice;
     return option;
   }));
-  voiceSelector.value=localStorage.getItem(`ani.voice.${currentProfile}`)||persona.voice||'Vivian';
-  persona.voice=voiceSelector.value;
+  const saved=localStorage.getItem(`ani.voice.${currentProfile}`)||'';
+  const selected=QWEN_VOICES.includes(saved)?saved:(QWEN_VOICES.includes(persona.voice)?persona.voice:'Vivian');
+  if(saved&&!QWEN_VOICES.includes(saved))localStorage.removeItem(`ani.voice.${currentProfile}`);
+  voiceSelector.value=selected;
+  persona.voice=selected;
 }
 voiceSelector?.addEventListener('change',()=>{
   if(!voiceSelector.value)return;
@@ -553,10 +571,9 @@ async function loadPersona(){
     const response=await fetch(`/api/persona?profile=${encodeURIComponent(currentProfile)}`);
     if(response.ok)persona=await response.json();
     const savedVoice=localStorage.getItem(`ani.voice.${currentProfile}`);
-    if(savedVoice)persona.voice=savedVoice;
+    if(savedVoice&&QWEN_VOICES.includes(savedVoice))persona.voice=savedVoice;
   }catch(_){}
-  const nameElement=document.querySelector('.topbar strong');
-  if(nameElement&&persona.display_name)nameElement.textContent=persona.display_name;
+  updateAvatarIdentity(avatarSelector?.selectedOptions[0]?.textContent||persona.display_name);
 }
 loadPersona();
 profilePicker?.querySelectorAll('[data-profile]').forEach(button=>{
