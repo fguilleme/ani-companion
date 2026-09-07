@@ -176,6 +176,10 @@ OLLAMA_BASE_URL = os.getenv('ANI_OLLAMA_BASE_URL', 'http://127.0.0.1:11434')
 MODELS_CACHE_TTL_SECONDS = max(1, int(os.getenv('ANI_MODELS_CACHE_TTL_SECONDS', '30')))
 _models_cache: tuple[float, list[dict]] | None = None
 MODELS_RE = re.compile(r'^[A-Za-z0-9._:/-]{1,160}$')
+COMPANION_MODELS = (
+    'hauhau-gemma4-vision:test',
+    'ani-gemma4:latest',
+)
 
 
 def fetch_local_models() -> list[dict]:
@@ -195,8 +199,9 @@ def fetch_local_models() -> list[dict]:
             'vision': bool(entry.get('capabilities')) and 'vision' in entry.get('capabilities', []),
         }
         for entry in payload.get('models', [])
-        if entry.get('name')
+        if entry.get('name') in COMPANION_MODELS
     ]
+    models.sort(key=lambda model: COMPANION_MODELS.index(model['id']))
     if models:
         _models_cache = (now, models)
     return models
@@ -623,8 +628,7 @@ def _stream_event(event_type: str, **payload) -> bytes:
 
 STREAMING_VOICE_INSTRUCTION = (
     "\n\nInstruction de forme pour la voix : commence par une première phrase à environ dix mots maximum, "
-    "complète et naturelle. Écris sans points de suspension ; préfère une virgule ou un point. "
-    "Réponds de façon concise : deux ou trois phrases courtes suffisent, sauf si on te demande un développement."
+    "complète et naturelle. Écris sans points de suspension ; préfère une virgule ou un point."
 )
 
 

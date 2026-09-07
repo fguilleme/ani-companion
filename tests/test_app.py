@@ -117,12 +117,13 @@ class AniCompanionTests(unittest.TestCase):
         )
         self.assertEqual(spoken, 'Oui, teste tranquillement. je suis là et je t’écoute.')
 
-    def test_streaming_prompt_limits_first_sentence_for_fast_tts_start(self):
+    def test_streaming_prompt_only_shapes_first_sentence_for_fast_tts_start(self):
         prompt = app_module.build_streaming_prompt('Raconte-moi quelque chose.')
         self.assertTrue(prompt.startswith('Raconte-moi quelque chose.'))
         self.assertIn('première phrase à environ dix mots maximum', prompt)
         self.assertIn('sans points de suspension', prompt)
-        self.assertIn('de façon concise', prompt)
+        self.assertNotIn('de façon concise', prompt)
+        self.assertNotIn('deux ou trois phrases', prompt)
 
     def test_tts_timing_logs_include_attempt_audio_metrics_and_ellipsis_text(self):
         source = (ROOT / 'app.py').read_text()
@@ -932,14 +933,16 @@ class AniCompanionTests(unittest.TestCase):
         self.assertIn("'salome'", source)
         self.assertIn("if payload.profile not in HERMES_PROFILES", source)
 
-    def test_models_catalog_lists_available_local_models(self):
+    def test_models_catalog_lists_only_fast_companion_models(self):
         client = TestClient(app)
         response = client.get('/api/models')
         self.assertEqual(response.status_code, 200)
         catalog = response.json()
-        self.assertTrue(catalog['models'])
         ids = {model['id'] for model in catalog['models']}
-        self.assertIn('ani-gemma4:latest', ids)
+        self.assertEqual(ids, {
+            'hauhau-gemma4-vision:test',
+            'ani-gemma4:latest',
+        })
         for model in catalog['models']:
             self.assertIsInstance(model['vision'], bool)
 
