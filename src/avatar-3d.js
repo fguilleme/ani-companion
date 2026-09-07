@@ -132,7 +132,7 @@ function frameModel(model) {
   const center = box.getCenter(new THREE.Vector3());
   const visibleHeight = size.y * HEAD_SHOT_HEIGHT_RATIO;
   const targetY = box.max.y - visibleHeight * 0.48;
-  const distance = visibleHeight / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2)) * 1.04;
+  const distance = 1;
   defaultCameraTarget.set(center.x, targetY, center.z);
   defaultCameraPosition.set(center.x, targetY, center.z + distance);
 
@@ -143,9 +143,9 @@ function frameModel(model) {
   const kneeY = kneePositions.length ? kneePositions.reduce((sum, value) => sum + value, 0) / kneePositions.length : box.min.y + size.y * 0.24;
   const actionHeight = Math.max(size.y * 0.55, box.max.y - kneeY);
   const actionTargetY = kneeY + actionHeight * 0.5;
-  const actionDistance = defaultCameraPosition.z - center.z + 1;
+  const actionDistance = 2;
   actionCameraTarget.set(center.x, actionTargetY, center.z);
-  actionCameraPosition.set(defaultCameraPosition.x, actionTargetY, defaultCameraPosition.z + 1);
+  actionCameraPosition.set(center.x, actionTargetY, center.z + actionDistance);
 
   camera.position.copy(defaultCameraPosition);
   controls.target.copy(defaultCameraTarget);
@@ -211,6 +211,7 @@ function playGlbClip(name, { once = false, durationMs = 0 } = {}) {
   const clip = glbAnimations.find(clip => clip.name.toLowerCase().includes(name.toLowerCase()));
   if (!clip) return false;
   const action = mixer.clipAction(clip);
+  mixer.stopAllAction();
   action.reset();
   action.setLoop(once ? THREE.LoopOnce : THREE.LoopRepeat);
   action.clampWhenFinished = once;
@@ -374,6 +375,13 @@ function playMotion(name) {
   return true;
 }
 
+function restoreGlbIdle() {
+  if (!mixer || !activeClip) return;
+  activeClip.stop();
+  activeClip = null;
+  if (glbIdleClip) mixer.clipAction(glbIdleClip).reset().play();
+}
+
 function applySpeakingMotion(elapsed) {
   const bobAmount = mouthOpen > 0.025 ? 1 : 0;
   if (idleBones.head) {
@@ -396,6 +404,7 @@ function applyActiveMotion(now) {
   const progress = (now - motionStartedAt) / motionDurations[activeMotion];
   if (progress >= 1) {
     activeMotion = null;
+    restoreGlbIdle();
     if (motionCameraActive) {
       motionCameraActive = false;
       cameraReturning = true;
@@ -474,7 +483,7 @@ function getAnimationState() {
   const values = {};
   for (const name of moodExpressions) values[name] = vrm?.expressionManager?.getValue(name) || 0;
   return {
-    ready: Boolean(vrm), activeMotion, emotion: activeEmotion, expressions: values,
+    ready: Boolean(vrm), activeMotion, activeClip: activeClip?.getClip().name || null, emotion: activeEmotion, expressions: values,
     headRotation: idleBones.head ? [idleBones.head.node.rotation.x, idleBones.head.node.rotation.y, idleBones.head.node.rotation.z] : null,
     avatarPosition: vrm?.scene.position.toArray() || null,
     avatarRotation: vrm ? [vrm.scene.rotation.x, vrm.scene.rotation.y, vrm.scene.rotation.z] : null,

@@ -882,7 +882,7 @@ class AniCompanionTests(unittest.TestCase):
 
     def test_service_worker_precaches_avatar_runtime(self):
         worker = (ROOT / 'static' / 'sw.js').read_text()
-        self.assertIn("const CACHE='ani-companion-v43'", worker)
+        self.assertIn("const CACHE='ani-companion-v44'", worker)
         self.assertIn("'/avatar-3d.bundle.js'", worker)
 
     def test_service_worker_activates_pipeline_update_immediately(self):
