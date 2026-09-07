@@ -1,12 +1,12 @@
 {
   "francois": {
-    "display_name": "Ani",
-    "avatar": "ani.glb",
-    "voice": "Vivian"
+    "display_name": "Melissa",
+    "avatar": "Melissa.glb",
+    "voice": "Nuna"
   },
   "salome": {
-    "display_name": "Ana",
-    "avatar": "ani.vrm",
-    "voice": "Vivian"
+    "display_name": "Ani",
+    "avatar": "Ani.vrm",
+    "voice": "Serena"
   }
 }

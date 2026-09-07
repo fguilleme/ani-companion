@@ -418,7 +418,8 @@ class AniCompanionTests(unittest.TestCase):
         self.assertEqual(requests[1]['params']['session_id'], 'runtime-1')
         self.assertEqual(requests[1]['params']['value'], 'ani-gemma4:latest --provider custom --session')
         self.assertEqual(requests[2]['method'], 'prompt.submit')
-        self.assertEqual(requests[2]['params']['text'], app_module.build_streaming_prompt('Dis deux phrases.'))
+        expected_name = app_module.load_avatar_persona('francois')['display_name']
+        self.assertEqual(requests[2]['params']['text'], app_module.build_streaming_prompt('Dis deux phrases.', expected_name))
 
     def test_gateway_stderr_drain_keeps_only_a_bounded_tail(self):
         async def scenario():
@@ -522,7 +523,8 @@ class AniCompanionTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         models = response.json()['models']
         ids = {model['id'] for model in models}
-        self.assertIn('ani.vrm', ids)
+        self.assertTrue(any(model_id.lower().endswith('.vrm') for model_id in ids))
+        self.assertTrue(any(model_id.lower().endswith('.glb') for model_id in ids))
         self.assertTrue(all(model['type'] in ('vrm', 'glb') for model in models))
 
     def test_pwa_offers_avatar_model_dropdown(self):
@@ -539,9 +541,11 @@ class AniCompanionTests(unittest.TestCase):
         self.assertIn('.glb', source)
 
     def test_persona_config_maps_profile_to_name_avatar_voice(self):
+        configured = json.loads((ROOT / 'avatars.json').read_text())['francois']
         persona = app_module.load_avatar_persona('francois')
-        self.assertEqual(persona['display_name'], 'Ani')
-        self.assertEqual(persona['voice'], 'Vivian')
+        self.assertEqual(persona['display_name'], configured['display_name'])
+        self.assertEqual(persona['avatar'], configured['avatar'])
+        self.assertEqual(persona['voice'], configured['voice'])
         fallback = app_module.load_avatar_persona('inconnu')
         self.assertEqual(fallback['display_name'], 'Ani')
 
@@ -675,7 +679,7 @@ class AniCompanionTests(unittest.TestCase):
         self.assertIn('window.aniAvatar?.setEmotion', script)
         self.assertIn('window.aniAvatar?.setMouthOpen', script)
         self.assertIn('static/models/*.vrm', gitignore)
-        self.assertTrue((ROOT / 'static' / 'models' / 'ani.vrm').is_file())
+        self.assertTrue(any((ROOT / 'static' / 'models').glob('*.vrm')))
 
     def test_mouth_animation_follows_audio_amplitude(self):
         script = (ROOT / 'static' / 'app.js').read_text()
@@ -878,7 +882,7 @@ class AniCompanionTests(unittest.TestCase):
 
     def test_service_worker_precaches_avatar_runtime(self):
         worker = (ROOT / 'static' / 'sw.js').read_text()
-        self.assertIn("const CACHE='ani-companion-v42'", worker)
+        self.assertIn("const CACHE='ani-companion-v43'", worker)
         self.assertIn("'/avatar-3d.bundle.js'", worker)
 
     def test_service_worker_activates_pipeline_update_immediately(self):
@@ -940,7 +944,7 @@ class AniCompanionTests(unittest.TestCase):
         catalog = response.json()
         ids = {model['id'] for model in catalog['models']}
         self.assertEqual(ids, {
-            'hauhau-gemma4-vision:test',
+            'ani-gemma4-vision:latest',
             'ani-gemma4:latest',
         })
         for model in catalog['models']:
@@ -964,7 +968,7 @@ class AniCompanionTests(unittest.TestCase):
         response = client.post('/api/chat/stream', json={
             'message': 'Coucou.',
             'profile': 'francois',
-            'model': 'hauhau-gemma4-vision:test',
+            'model': 'ani-gemma4-vision:latest',
         })
         self.assertEqual(response.status_code, 200)
         self.assertTrue(any('"start"' in line for line in response.text.splitlines()))
@@ -1004,7 +1008,7 @@ class AniCompanionTests(unittest.TestCase):
                         'session_id': 'runtime-model',
                         'stored_session_id': 'stored-model',
                     }},
-                    {'jsonrpc': '2.0', 'id': '2', 'result': {'scope': 'session', 'value': 'hauhau-gemma4-vision:test'}},
+                    {'jsonrpc': '2.0', 'id': '2', 'result': {'scope': 'session', 'value': 'ani-gemma4-vision:latest'}},
                     {'jsonrpc': '2.0', 'id': '3', 'result': {'status': 'streaming'}},
                     {'jsonrpc': '2.0', 'method': 'event', 'params': {
                         'type': 'message.complete',
@@ -1028,12 +1032,12 @@ class AniCompanionTests(unittest.TestCase):
         ):
             response = TestClient(app).post('/api/chat/stream', json={
                 'message': 'Dis bonjour.',
-                'model': 'hauhau-gemma4-vision:test',
+                'model': 'ani-gemma4-vision:latest',
             })
 
         self.assertEqual(response.status_code, 200)
         requests = [json.loads(raw) for raw in fake_process.stdin.writes]
-        self.assertEqual(requests[1]['params']['value'], 'hauhau-gemma4-vision:test --provider custom --session')
+        self.assertEqual(requests[1]['params']['value'], 'ani-gemma4-vision:latest --provider custom --session')
 
     def test_pwa_offers_a_model_selector_per_profile(self):
         script = (ROOT / 'static' / 'app.js').read_text()

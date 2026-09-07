@@ -41,6 +41,7 @@ try {
   });
   await page.addInitScript(() => {
     localStorage.setItem('ani.profile', 'francois');
+    localStorage.setItem('ani.avatar.francois', 'Ani.vrm');
     localStorage.setItem('ani.voice', 'on');
     localStorage.setItem('ani.microphone', 'off');
     const nativeFetch = window.fetch.bind(window);
@@ -76,7 +77,11 @@ try {
     };
   });
   await page.goto('http://127.0.0.1:8791/', { waitUntil: 'networkidle' });
-  await page.waitForFunction(() => window.aniAvatar?.getAnimationState().ready, null, { timeout: 30000 });
+  try {
+    await page.waitForFunction(() => window.aniAvatar?.getAnimationState().ready, null, { timeout: 30000 });
+  } catch {
+    fail(`Avatar non prêt: ${JSON.stringify(consoleErrors)}`);
+  }
 
   const canvas = await page.locator('#avatar-canvas').boundingBox();
   if (!canvas || canvas.width < 300 || canvas.height < 300) fail(`Canvas avatar trop petit: ${JSON.stringify(canvas)}`);
@@ -98,13 +103,15 @@ try {
   await page.waitForTimeout(700);
   const spin = await page.evaluate(() => ({ animation: window.aniAvatar.getAnimationState(), camera: window.aniAvatar.getCameraState() }));
   if (spin.animation.activeMotion !== 'spin' || Math.abs(spin.animation.avatarRotation[1]) < 0.5) fail(`Rotation non appliquée: ${JSON.stringify(spin)}`);
-  const closeDistance = distance(closeCamera.position, closeCamera.target);
-  const actionDistance = distance(spin.camera.position, spin.camera.target);
-  if (actionDistance < closeDistance * 1.8) fail(`La caméra ne recule pas assez pour le mouvement: ${closeDistance} -> ${actionDistance}`);
+  await page.waitForTimeout(2600);
+  const sustainedSpin = await page.evaluate(() => ({ animation: window.aniAvatar.getAnimationState(), camera: window.aniAvatar.getCameraState() }));
+  if (sustainedSpin.animation.activeMotion !== 'spin') fail(`L’animation ne dure pas plusieurs secondes: ${JSON.stringify(sustainedSpin)}`);
+  const cameraRetreat = sustainedSpin.camera.position[2] - closeCamera.position[2];
+  if (cameraRetreat < 0.9 || cameraRetreat > 1.1) fail(`La caméra ne recule pas d’un mètre: ${cameraRetreat}`);
   await page.waitForFunction(closePosition => {
     const current = window.aniAvatar.getCameraState().position;
     return Math.sqrt(current.reduce((sum, value, index) => sum + (value - closePosition[index]) ** 2, 0)) <= 0.03;
-  }, closeCamera.position, { timeout: 6000 });
+  }, closeCamera.position, { timeout: 10000 });
   const afterSpin = await page.evaluate(() => window.aniAvatar.getCameraState());
 
   const before = afterSpin;
@@ -167,7 +174,7 @@ try {
   await page.locator('#avatar-canvas').screenshot({ path: '/tmp/ani-avatar-canvas.png' });
   await page.screenshot({ path: '/tmp/ani-avatar-motions.png' });
   if (consoleErrors.length) fail(`Erreurs navigateur: ${consoleErrors.join(' | ')}`);
-  console.log(JSON.stringify({ ok: true, expression: happy.expressions.happy, headDelta: distance(speakingA, speakingB), spinY: spin.animation.avatarRotation[1], cameraZoomRatio: actionDistance / closeDistance, motion: dance.activeMotion, audioSegments: ttsRequests.length, screenshot: '/tmp/ani-avatar-motions.png' }));
+  console.log(JSON.stringify({ ok: true, expression: happy.expressions.happy, headDelta: distance(speakingA, speakingB), spinY: spin.animation.avatarRotation[1], cameraRetreat, motion: dance.activeMotion, audioSegments: ttsRequests.length, screenshot: '/tmp/ani-avatar-motions.png' }));
 } finally {
   if (browser) await browser.close();
   server.kill('SIGTERM');

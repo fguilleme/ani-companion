@@ -64,7 +64,7 @@ const emotionMap = {
   curious: ['surprised', 0.58],
   shy: ['relaxed', 0.5],
 };
-const motionDurations = { dance: 4200, spin: 2400, jump: 900, sway: 2800, tease: 1800 };
+const motionDurations = { dance: 5200, spin: 4500, jump: 3500, sway: 3200, tease: 3000 };
 const moodExpressions = ['happy', 'sad', 'angry', 'surprised', 'relaxed'];
 
 function expression(name, value) {
@@ -143,9 +143,9 @@ function frameModel(model) {
   const kneeY = kneePositions.length ? kneePositions.reduce((sum, value) => sum + value, 0) / kneePositions.length : box.min.y + size.y * 0.24;
   const actionHeight = Math.max(size.y * 0.55, box.max.y - kneeY);
   const actionTargetY = kneeY + actionHeight * 0.5;
-  const actionDistance = actionHeight / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2)) * 1.12;
+  const actionDistance = defaultCameraPosition.z - center.z + 1;
   actionCameraTarget.set(center.x, actionTargetY, center.z);
-  actionCameraPosition.set(center.x, actionTargetY, center.z + actionDistance);
+  actionCameraPosition.set(defaultCameraPosition.x, actionTargetY, defaultCameraPosition.z + 1);
 
   camera.position.copy(defaultCameraPosition);
   controls.target.copy(defaultCameraTarget);
@@ -206,7 +206,7 @@ let mixer = null;
 let activeClip = null;
 let glbIdleClip = null;
 
-function playGlbClip(name, { loop = true, once = false } = {}) {
+function playGlbClip(name, { once = false, durationMs = 0 } = {}) {
   if (!mixer) return false;
   const clip = glbAnimations.find(clip => clip.name.toLowerCase().includes(name.toLowerCase()));
   if (!clip) return false;
@@ -214,6 +214,7 @@ function playGlbClip(name, { loop = true, once = false } = {}) {
   action.reset();
   action.setLoop(once ? THREE.LoopOnce : THREE.LoopRepeat);
   action.clampWhenFinished = once;
+  if (durationMs > 0) action.setDuration(durationMs / 1000);
   action.play();
   activeClip = action;
   return true;
@@ -359,7 +360,7 @@ function updateMouth(elapsed) {
 function playMotion(name) {
   if (!motionDurations[name] || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return false;
   const clipMap = { dance: 'dance', spin: 'turn', jump: 'jump', sway: 'sway', tease: 'dance' };
-  if (glbAnimations.length && playGlbClip(clipMap[name] || name, { once: true })) {
+  if (glbAnimations.length && playGlbClip(clipMap[name] || name, { once: true, durationMs: motionDurations[name] })) {
     activeMotion = name;
     motionStartedAt = performance.now();
     motionCameraActive = ['dance', 'spin', 'jump'].includes(name);
@@ -432,11 +433,11 @@ renderer.setAnimationLoop(() => {
   const delta = Math.min(clock.getDelta(), 0.05);
   const elapsed = clock.elapsedTime;
   if (motionCameraActive) {
-    const blend = 1 - Math.exp(-delta * 3.8);
+    const blend = 1 - Math.exp(-delta * 1.6);
     camera.position.lerp(actionCameraPosition, blend);
     controls.target.lerp(actionCameraTarget, blend);
   } else if (cameraReturning) {
-    const blend = 1 - Math.exp(-delta * 4.2);
+    const blend = 1 - Math.exp(-delta * 1.6);
     camera.position.lerp(defaultCameraPosition, blend);
     controls.target.lerp(defaultCameraTarget, blend);
     if (camera.position.distanceTo(defaultCameraPosition) < 0.002 && controls.target.distanceTo(defaultCameraTarget) < 0.002) {

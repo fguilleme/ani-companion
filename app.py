@@ -177,7 +177,7 @@ MODELS_CACHE_TTL_SECONDS = max(1, int(os.getenv('ANI_MODELS_CACHE_TTL_SECONDS', 
 _models_cache: tuple[float, list[dict]] | None = None
 MODELS_RE = re.compile(r'^[A-Za-z0-9._:/-]{1,160}$')
 COMPANION_MODELS = (
-    'hauhau-gemma4-vision:test',
+    'ani-gemma4-vision:latest',
     'ani-gemma4:latest',
 )
 

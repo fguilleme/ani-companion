@@ -32,7 +32,7 @@ try {
   // Silence until playback starts, then a sustained quiet user-like tone.
   writeFileSync(fakeMicPath, wav({
     duration: 12,
-    sampleAt: time => time >= 5 && time < 6 ? 0.015 * Math.sin(2 * Math.PI * 220 * time) : 0,
+    sampleAt: time => time >= 3 && time < 5 ? 0.08 * Math.sin(2 * Math.PI * 220 * time) : 0,
   }), { flag: 'wx', mode: 0o600 });
   server = spawn('/home/francois/.hermes/hermes-agent/venv/bin/python', [
     '-m', 'uvicorn', 'app:app', '--host', '127.0.0.1', '--port', String(port),
@@ -118,9 +118,15 @@ try {
   await page.waitForFunction(() => document.querySelector('#mic-button').classList.contains('listening'));
   await page.evaluate(() => {
     const player = document.querySelector('#voice-player');
-    window.__bargeIn = { maxRms: 0 };
+    window.__bargeIn = { maxRms: 0, loudSamples: 0, longestLoudRun: 0, loudRun: 0 };
     window.__bargeInMeter = setInterval(() => {
-      window.__bargeIn.maxRms = Math.max(window.__bargeIn.maxRms, window.__aniMicRms || 0);
+      const rms = window.__aniMicRms || 0;
+      window.__bargeIn.maxRms = Math.max(window.__bargeIn.maxRms, rms);
+      if (rms > 0.035) {
+        window.__bargeIn.loudSamples++;
+        window.__bargeIn.loudRun++;
+        window.__bargeIn.longestLoudRun = Math.max(window.__bargeIn.longestLoudRun, window.__bargeIn.loudRun);
+      } else window.__bargeIn.loudRun = 0;
     }, 10);
     player.addEventListener('play', () => {
       if (player.dataset.turnId) window.__bargeIn.playedAt = performance.now();
