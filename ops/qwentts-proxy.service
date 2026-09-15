@@ -1,0 +1,19 @@
+[Unit]
+Description=Qwen TTS chunked proxy for Ani Companion
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=francois
+WorkingDirectory=/home/francois/projects/ani-companion
+# The proxy currently uses 127.0.0.1:15004 and forwards to 127.0.0.1:15003.
+# Change those constants in ops/qwentts-chunked-proxy.py if your layout differs.
+ExecStart=/home/francois/.hermes/hermes-agent/venv/bin/python ops/qwentts-chunked-proxy.py
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

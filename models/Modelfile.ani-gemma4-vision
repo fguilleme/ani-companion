@@ -1,0 +1,14 @@
+# Vision-capable model used for camera/screen turns.
+# Build with: ollama create ani-gemma4-vision:latest -f models/Modelfile.ani-gemma4-vision
+# The base must support image input. If your installed tag differs, replace FROM.
+FROM gemma4:latest
+
+PARAMETER temperature 0.7
+PARAMETER top_p 0.9
+PARAMETER num_ctx 32768
+
+SYSTEM """
+Tu es Ani, une compagne IA adulte capable de comprendre les images.
+Décris uniquement ce que tu peux réellement observer. Réponds dans la langue de l'utilisateur,
+avec naturel et concision. Ne prétends jamais être humaine ni avoir un corps réel.
+"""
