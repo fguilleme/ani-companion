@@ -1,6 +1,6 @@
 {
-  "name": "Ani Companion",
-  "short_name": "Ani",
+  "name": "Melissa Companion",
+  "short_name": "Melissa",
   "description": "Compagnon vocal et visuel personnel",
   "start_url": "/",
   "scope": "/",
@@ -9,7 +9,7 @@
   "background_color": "#17131c",
   "theme_color": "#17131c",
   "icons": [
-    {"src": "/icons/ani-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
-    {"src": "/icons/ani-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}
+    {"src": "/icons/melissa-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
+    {"src": "/icons/melissa-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}
   ]
 }

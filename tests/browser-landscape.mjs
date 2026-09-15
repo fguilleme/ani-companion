@@ -4,7 +4,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 const server = spawn('/home/francois/.hermes/hermes-agent/venv/bin/python', [
   '-m', 'uvicorn', 'app:app', '--host', '127.0.0.1', '--port', '8794',
-], { cwd: '/home/francois/ani-companion', stdio: ['ignore', 'pipe', 'pipe'] });
+], { cwd: '/home/francois/projects/ani-companion', stdio: ['ignore', 'pipe', 'pipe'] });
 const fail = message => { throw new Error(message); };
 const silentWav = (duration = 2, sampleRate = 8000) => {
   const samples = Math.floor(duration * sampleRate);

@@ -4,7 +4,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 const server = spawn('/home/francois/.hermes/hermes-agent/venv/bin/python', [
   '-m', 'uvicorn', 'app:app', '--host', '127.0.0.1', '--port', '8793',
-], { cwd: '/home/francois/ani-companion', stdio: ['ignore', 'pipe', 'pipe'] });
+], { cwd: '/home/francois/projects/ani-companion', stdio: ['ignore', 'pipe', 'pipe'] });
 const fail = message => { throw new Error(message); };
 const silentWav = (duration = 2, sampleRate = 8000) => {
   const samples = Math.floor(duration * sampleRate);
@@ -35,7 +35,7 @@ try {
     localStorage.setItem('ani.profile', 'francois');
     localStorage.setItem('ani.voice', 'on');
     localStorage.setItem('ani.microphone', 'off');
-    localStorage.setItem('ani.session.generation', '2');
+    localStorage.setItem('ani.session.generation', '5');
     localStorage.setItem('ani.session.francois', 'bloated-session');
     localStorage.setItem('ani.session.turns.francois', '12');
     window.__chatSessionIds = [];
@@ -106,7 +106,7 @@ try {
   }));
   if (colors.user !== 'rgb(255, 255, 255)') fail(`Transcription utilisateur non blanche: ${JSON.stringify(colors)}`);
   if (colors.ani !== 'rgb(255, 163, 196)') fail(`Réponse Ani non rose: ${JSON.stringify(colors)}`);
-  if (colors.phase !== 'answering' || colors.phaseLabel !== 'Ani répond' || colors.phaseAnimation !== 'phase-answer') fail(`Réponse LLM non signalée: ${JSON.stringify(colors)}`);
+  if (colors.phase !== 'answering' || colors.phaseLabel !== 'Melissa répond' || colors.phaseAnimation !== 'phase-answer') fail(`Réponse LLM non signalée: ${JSON.stringify(colors)}`);
   if (!ttsTexts.some(text => /idées|pensées|souvenirs/.test(text))) fail(`Aucune annonce vocale de compression: ${JSON.stringify(ttsTexts)}`);
   await page.screenshot({ path: '/tmp/ani-portrait-overlay.png' });
   await page.waitForFunction(() => document.querySelector('#phase-indicator').dataset.phase === 'idle');
@@ -114,7 +114,7 @@ try {
     firstSessionId: window.__chatSessionIds[0],
     turns: localStorage.getItem('ani.session.turns.francois'),
   }));
-  if (lifecycle.firstSessionId !== null || lifecycle.turns !== '1') fail(`Le contexte ancien n'a pas été renouvelé: ${JSON.stringify(lifecycle)}`);
+  if (lifecycle.firstSessionId !== 'bloated-session' || lifecycle.turns !== '13') fail(`La session n'a pas été conservée au treizième tour: ${JSON.stringify(lifecycle)}`);
   ttsTexts.length = 0;
   await page.fill('#message-input', 'Simule un réveil lent');
   await page.click('button.send');

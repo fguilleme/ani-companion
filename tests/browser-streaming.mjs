@@ -4,7 +4,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 const server = spawn('/home/francois/.hermes/hermes-agent/venv/bin/python', [
   '-m', 'uvicorn', 'app:app', '--host', '127.0.0.1', '--port', '8792',
-], { cwd: '/home/francois/ani-companion', stdio: ['ignore', 'pipe', 'pipe'] });
+], { cwd: '/home/francois/projects/ani-companion', stdio: ['ignore', 'pipe', 'pipe'] });
 
 const fail = message => { throw new Error(message); };
 const silentWav = (duration = 0.12, sampleRate = 8000) => {
@@ -45,6 +45,8 @@ try {
         [0, { type: 'start', session_id: 'stream-browser-test', turn_key: 'server-generated-browser-key' }],
         [10, { type: 'delta', text: 'Premier segment. ' }],
         [20, { type: 'speech', text: 'Premier segment.', emotion: 'happy' }],
+        [70, { type: 'phase', phase: 'compression' }],
+        [100, { type: 'phase', phase: 'llm' }],
         [180, { type: 'delta', text: 'Deuxième segment. ' }],
         [190, { type: 'speech', text: 'Deuxième segment.', emotion: 'happy' }],
         [350, { type: 'delta', text: 'Troisième segment.' }],
@@ -82,13 +84,17 @@ try {
     fail(`Lecture streaming incomplète: ${JSON.stringify({ ttsRequests, debug, cause: error.message })}`);
   }
   await page.waitForFunction(() => window.__aniCompleteAt > 0, null, { timeout: 3000 });
+  for (let attempt = 0; attempt < 50 && ttsRequests.length < 4; attempt++) await delay(50);
   const state = await page.evaluate(() => ({
     playTimes: window.__aniPlayTimes,
     completeAt: window.__aniCompleteAt,
     reply: [...document.querySelectorAll('.bubble.ani')].at(-1)?.textContent,
   }));
-  if (ttsRequests.join('|') !== 'Premier segment.|Deuxième segment.|Troisième segment.') {
-    fail(`Requêtes TTS incorrectes: ${JSON.stringify(ttsRequests)}`);
+  if (ttsRequests.slice(0, 3).join('|') !== 'Premier segment.|Deuxième segment.|Troisième segment.') {
+    fail(`La compression s'est insérée dans la parole principale: ${JSON.stringify(ttsRequests)}`);
+  }
+  if (ttsRequests.length !== 4 || /segment/i.test(ttsRequests[3])) {
+    fail(`L'annonce de compression n'a pas été reportée après la réponse: ${JSON.stringify(ttsRequests)}`);
   }
   if (!state.playTimes[0] || state.playTimes[0] >= state.completeAt) {
     fail(`Le premier audio n'a pas commencé avant la fin du LLM: ${JSON.stringify(state)}`);

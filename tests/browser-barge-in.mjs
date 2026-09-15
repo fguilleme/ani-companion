@@ -36,7 +36,7 @@ try {
   }), { flag: 'wx', mode: 0o600 });
   server = spawn('/home/francois/.hermes/hermes-agent/venv/bin/python', [
     '-m', 'uvicorn', 'app:app', '--host', '127.0.0.1', '--port', String(port),
-  ], { cwd: '/home/francois/ani-companion', stdio: ['ignore', 'pipe', 'pipe'] });
+  ], { cwd: '/home/francois/projects/ani-companion', stdio: ['ignore', 'pipe', 'pipe'] });
   for (let attempt = 0; attempt < 50; attempt++) {
     try { if ((await fetch(`${origin}/api/health`)).ok) break; } catch {}
     await delay(100);
@@ -166,16 +166,16 @@ try {
     }));
     fail(`La transcription n'a pas lancé de requête suivante: ${JSON.stringify({ chatTiming, transcriptState, sttRequests })}`);
   }
-  if (chatTiming.requestStartedAt[1] < chatTiming.firstStreamCompletedAt) {
-    fail(`La requête suivante a commencé avant la fin du premier flux: ${JSON.stringify(chatTiming)}`);
+  if (chatTiming.requestStartedAt[1] >= chatTiming.firstStreamCompletedAt) {
+    fail(`La transcription est restée bloquée jusqu’à la fin du premier flux: ${JSON.stringify(chatTiming)}`);
   }
-  if (cancelRequests.length) {
+  if (!cancelRequests.length) {
     const transcriptState = await page.evaluate(() => ({
       input: document.querySelector('#message-input').value,
       phase: document.querySelector('#phase-indicator').dataset.phase,
       micClass: document.querySelector('#mic-button').className,
     }));
-    fail(`La transcription a annulé le LLM original: ${JSON.stringify({ cancelRequests, chatTiming, transcriptState, sttRequests })}`);
+    fail(`La transcription complète n'a pas annulé le LLM avant le nouveau tour: ${JSON.stringify({ cancelRequests, chatTiming, transcriptState, sttRequests })}`);
   }
   console.log(JSON.stringify({ ok: true, playerCurrentTime: state.playerCurrentTime, maxRms: state.maxRms, ttsCancelRequests, cancelRequests, chatTiming }));
 } finally {

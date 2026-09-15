@@ -6,32 +6,32 @@
   <meta name="theme-color" content="#17131c">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="Ani">
-  <title>Ani</title>
+  <meta name="apple-mobile-web-app-title" content="Melissa">
+  <title>Melissa</title>
   <link rel="manifest" href="/manifest.webmanifest">
-  <link rel="icon" href="/icons/ani-192.png" type="image/png">
-  <link rel="apple-touch-icon" href="/icons/ani-192.png">
-  <link rel="stylesheet" href="/style.css?v=33">
+  <link rel="icon" href="/icons/melissa-192.png" type="image/png">
+  <link rel="apple-touch-icon" href="/icons/melissa-192.png">
+  <link rel="stylesheet" href="/style.css?v=40">
 </head>
 <body>
   <main class="companion-shell">
     <div id="profile-picker" class="profile-picker" hidden>
       <div class="profile-picker-card">
-        <strong>Qui parle à Ani ?</strong>
+        <strong>Qui parle à Melissa ?</strong>
         <div class="profile-picker-actions">
           <button type="button" data-profile="francois">François</button>
           <button type="button" data-profile="salome">Salomé</button>
         </div>
       </div>
     </div>
-    <section class="stage" aria-label="Ani, compagnon animé">
+    <section class="stage" aria-label="Melissa, compagnon animé">
       <div class="atmosphere" aria-hidden="true"><span></span><span></span><span></span></div>
       <header class="topbar">
-        <div><strong>Ani</strong><span id="status"><i></i> présente</span></div>
+        <div><strong>Melissa</strong></div>
         <div class="top-actions">
-          <select id="model-selector" class="model-selector" aria-label="Modèle d’Ani"></select>
-          <select id="avatar-selector" class="model-selector" aria-label="Avatar d’Ani"></select>
-          <select id="voice-selector" class="model-selector" aria-label="Voix d’Ani"></select>
+          <select id="model-selector" class="model-selector" aria-label="Modèle de Melissa"></select>
+          <select id="avatar-selector" class="model-selector" aria-label="Avatar de Melissa"></select>
+          <select id="voice-selector" class="model-selector" aria-label="Voix de Melissa"></select>
           <button id="install-button" class="install-control" type="button" hidden>Installer</button>
         </div>
       </header>
@@ -42,23 +42,25 @@
         <time aria-hidden="true">00:00</time>
       </div>
 
+      <div id="motion-indicator" class="motion-indicator" aria-live="polite" hidden></div>
+
       <div id="ani-avatar" class="avatar emotion-neutral" aria-live="polite">
         <div class="avatar-shadow" aria-hidden="true"></div>
-        <canvas id="avatar-canvas" aria-label="Ani, avatar 3D animé"></canvas>
-        <div id="avatar-loading" class="avatar-loading">Chargement d’Ani…</div>
+        <canvas id="avatar-canvas" aria-label="Melissa, avatar 3D animé"></canvas>
+        <div id="avatar-loading" class="avatar-loading">Chargement de Melissa…</div>
       </div>
     </section>
 
-    <section class="conversation" aria-label="Conversation avec Ani">
+    <section class="conversation" aria-label="Conversation avec Melissa">
       <div id="history" class="history" aria-live="polite"><div class="history-sentinel" aria-hidden="true"></div></div>
       <form id="chat-form" autocomplete="off">
-        <button id="camera-button" class="capture" type="button" aria-label="Prendre une photo">
+        <button id="camera-button" class="capture" type="button" aria-label="Prendre une photo" aria-disabled="true" title="Sélectionne un modèle vision pour utiliser cette fonction" disabled>
           <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
             <circle cx="12" cy="13" r="4"/>
           </svg>
         </button>
-        <button id="screen-button" class="capture" type="button" aria-label="Montrer mon écran">
+        <button id="screen-button" class="capture" type="button" aria-label="Montrer mon écran" aria-disabled="true" title="Sélectionne un modèle vision pour utiliser cette fonction" disabled>
           <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <rect x="2" y="3" width="20" height="14" rx="2"/>
             <line x1="8" y1="21" x2="16" y2="21"/>
@@ -80,8 +82,8 @@
   </main>
   <audio id="voice-player" preload="none"></audio>
   <audio id="status-player" preload="none"></audio>
-  <script src="/avatar-3d.bundle.js?v=49" defer></script>
-  <script src="/app.js?v=43" defer></script>
+  <script src="/avatar-3d.bundle.js?v=68" defer></script>
+  <script src="/app.js?v=63" defer></script>
   <script>if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js'))</script>
 </body>
 </html>

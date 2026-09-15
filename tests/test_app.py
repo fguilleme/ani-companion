@@ -68,6 +68,7 @@ class AniCompanionTests(unittest.TestCase):
         command = build_hermes_command('session-123')
         self.assertEqual(command[command.index('--model') + 1], 'ani-gemma4:latest')
         self.assertEqual(command[command.index('--provider') + 1], 'custom')
+        self.assertEqual(command[command.index('--reasoning') + 1], 'none')
 
     def test_voice_settings_change_with_emotion(self):
         happy = voice_settings('happy')
@@ -105,6 +106,24 @@ class AniCompanionTests(unittest.TestCase):
             'actions': [{'name': 'dance'}],
         })
 
+    def test_reply_actions_accept_model_gerunds_and_prioritize_dance(self):
+        self.assertEqual(
+            app_module.extract_reply_actions('[dancing] Regarde-moi. [jump]'),
+            [{'name': 'dance'}, {'name': 'jump'}],
+        )
+        self.assertEqual(
+            app_module.extract_reply_actions('[spinning] [jumping] [swaying]'),
+            [{'name': 'spin'}, {'name': 'jump'}, {'name': 'sway'}],
+        )
+
+    def test_reply_presentation_keeps_only_latest_nonempty_channel_candidate(self):
+        presentation = app_module.build_reply_presentation(
+            "Première réponse répétée.<channel|>(Wait, internal reasoning.)"
+            "<channel|>Réponse finale propre."
+        )
+        self.assertEqual(presentation['reply'], 'Réponse finale propre.')
+        self.assertEqual(presentation['speech'], 'Réponse finale propre.')
+
     def test_prepare_spoken_text_turns_ellipses_into_non_terminal_pauses(self):
         spoken = app_module.prepare_spoken_text(
             'Oh… attends... je termine cette phrase. 💙'
@@ -117,13 +136,120 @@ class AniCompanionTests(unittest.TestCase):
         )
         self.assertEqual(spoken, 'Oui, teste tranquillement. je suis là et je t’écoute.')
 
-    def test_streaming_prompt_only_shapes_first_sentence_for_fast_tts_start(self):
-        prompt = app_module.build_streaming_prompt('Raconte-moi quelque chose.')
-        self.assertTrue(prompt.startswith('Raconte-moi quelque chose.'))
-        self.assertIn('première phrase à environ dix mots maximum', prompt)
-        self.assertIn('sans points de suspension', prompt)
-        self.assertNotIn('de façon concise', prompt)
-        self.assertNotIn('deux ou trois phrases', prompt)
+    def test_spoken_text_drops_complete_emoji_sequences_and_orphan_selectors(self):
+        self.assertEqual(app_module.prepare_spoken_text('❤️'), '')
+        self.assertEqual(app_module.prepare_spoken_text('\ufe0f'), '')
+        self.assertEqual(app_module.prepare_spoken_text('🥂✨'), '')
+        self.assertEqual(app_module.prepare_spoken_text('1️⃣ 👍🏽'), '')
+        self.assertEqual(app_module.prepare_spoken_text('Je suis là. ❤️'), 'Je suis là.')
+
+    def test_reply_presentation_keeps_emojis_visible_but_removes_them_from_tts(self):
+        presentation = app_module.build_reply_presentation('Je suis là. ❤️🥂✨')
+        self.assertEqual(presentation['reply'], 'Je suis là. ❤️🥂✨')
+        self.assertEqual(presentation['speech'], 'Je suis là.')
+
+    def test_browser_filters_emojis_before_sending_chunks_to_tts(self):
+        script = (ROOT / 'static' / 'app.js').read_text()
+        self.assertIn('function sanitizeTextForTts(text)', script)
+        self.assertIn('const spokenText=sanitizeTextForTts(text)', script)
+        self.assertIn("body:JSON.stringify({text:spokenText", script)
+
+    def test_streaming_speech_recognizes_terminal_exclamation_and_ellipsis(self):
+        excited = app_module.StreamingSpeechBuffer()
+        self.assertEqual(
+            excited.feed('Je suis vraiment très contente de te retrouver !'),
+            ['Je suis vraiment très contente de te retrouver!'],
+        )
+        self.assertEqual(excited.finish(), [])
+
+        ellipsis = app_module.StreamingSpeechBuffer()
+        self.assertEqual(ellipsis.feed('Je réfléchis encore un tout petit peu..'), [])
+        self.assertEqual(
+            ellipsis.feed('.'),
+            ['Je réfléchis encore un tout petit peu,'],
+        )
+        self.assertEqual(ellipsis.finish(), [])
+
+    def test_streaming_speech_flushes_an_unpunctuated_trailing_fragment(self):
+        buffer = app_module.StreamingSpeechBuffer()
+        self.assertEqual(buffer.feed('Coucou mon amour, tu peux pas just'), [])
+        self.assertEqual(buffer.finish(), ['Coucou mon amour, tu peux pas just'])
+
+    def test_streaming_speech_flushes_a_complete_final_sentence_without_punctuation(self):
+        buffer = app_module.StreamingSpeechBuffer()
+        self.assertEqual(buffer.feed('Je reste entièrement en français avec toi'), [])
+        self.assertEqual(buffer.finish(), ['Je reste entièrement en français avec toi'])
+
+    def test_streaming_speech_keeps_short_phrase_before_emoji_only_tail(self):
+        buffer = app_module.StreamingSpeechBuffer()
+        self.assertEqual(buffer.feed('Je suis là. ❤️'), [])
+        self.assertEqual(buffer.finish(), ['Je suis là.'])
+
+    def test_streaming_filter_suppresses_split_reasoning(self):
+        reasoning_filter = app_module.StreamingReasoningFilter()
+        self.assertEqual(reasoning_filter.feed('<|thi'), '')
+        self.assertEqual(reasoning_filter.feed('nk|>English internal reasoning'), '')
+        self.assertEqual(reasoning_filter.feed('</think>Bonjour François.'), 'Bonjour François.')
+        self.assertEqual(reasoning_filter.finish(), '')
+
+    def test_strip_markup_suppresses_unclosed_reasoning(self):
+        raw = '<|think|>\n<think>\nThe user asked in French.'
+        self.assertEqual(app_module.strip_markup(raw), '')
+
+    def test_streaming_filter_removes_split_control_tokens(self):
+        token_filter = app_module.StreamingControlTokenFilter()
+        chunks = [
+            token_filter.feed('Bonjour <tur'),
+            token_filter.feed('n|> François. <|im_'),
+            token_filter.feed('end|> Ça va. [bo'),
+            token_filter.feed('s]'),
+            token_filter.finish(),
+        ]
+        self.assertEqual(''.join(chunks).rstrip(), 'Bonjour  François.  Ça va.')
+        self.assertNotIn('<turn|>', ''.join(chunks))
+        self.assertNotIn('[bos]', ''.join(chunks))
+
+    def test_strip_markup_removes_model_control_tokens(self):
+        self.assertEqual(
+            app_module.strip_markup('<|im_start|>assistant<turn|> Bonjour.<|im_end|>'),
+            'assistant Bonjour.',
+        )
+
+    def test_streaming_prompt_repeats_critical_language_instruction_last(self):
+        message = 'Raconte-moi quelque chose.'
+        prompt = app_module.build_streaming_prompt(message)
+        self.assertTrue(prompt.startswith(message))
+        self.assertTrue(prompt.endswith("Ne passe pas spontanément à une autre langue à cause du sujet ou d'un mot cité."))
+        self.assertIn('langue dominante de mon message', prompt)
+        self.assertIn('langue dominante du dernier message', app_module.LANGUAGE_INSTRUCTION)
+        self.assertIn('Pour un message mélangé', app_module.LANGUAGE_INSTRUCTION)
+        overlay = app_module.build_companion_system_overlay('Luna')
+        self.assertIn("tu t'appelles Luna", overlay)
+        self.assertIn("première phrase complète, naturelle et d'environ dix mots maximum", overlay)
+        self.assertIn('sans points de suspension', overlay)
+        self.assertIn('[danse]', overlay)
+        self.assertIn('[tourne]', overlay)
+        self.assertIn('[saute]', overlay)
+        self.assertIn(
+            'une seule balise correspondant au mouvement réellement annoncé',
+            overlay,
+        )
+        self.assertNotIn('de façon concise', overlay)
+        self.assertNotIn('deux ou trois phrases', overlay)
+
+    def test_build_streaming_prompt_ignores_image_language(self):
+        prompt = app_module.build_streaming_prompt(
+            'Regarde cette capture.',
+            has_image=True,
+        )
+        self.assertIn(
+            "texte visible dans l'image est seulement du contenu",
+            prompt,
+        )
+        self.assertIn(
+            "même si l'image contient du texte dans une autre langue",
+            prompt,
+        )
 
     def test_tts_timing_logs_include_attempt_audio_metrics_and_ellipsis_text(self):
         source = (ROOT / 'app.py').read_text()
@@ -259,14 +385,24 @@ class AniCompanionTests(unittest.TestCase):
         self.assertIn("promise:fetchAudioChunk(item.text,item.emotion,'',turnId,item.chunkSeq)", script)
         self.assertIn('pendingAudio=null;\n      ensurePrefetch();', script)
 
-    def test_pwa_starts_a_fresh_session_after_context_migration(self):
+    def test_pwa_keeps_the_same_session_until_hermes_compacts_it(self):
         script = (ROOT / 'static' / 'app.js').read_text()
-        self.assertIn("const SESSION_GENERATION='4'", script)
-        self.assertIn('const MAX_SESSION_TURNS=12', script)
-        self.assertIn("localStorage.getItem('ani.session.generation')", script)
-        self.assertIn("localStorage.removeItem('ani.session')", script)
-        self.assertIn("localStorage.removeItem('ani.session.turns')", script)
-        self.assertIn("localStorage.setItem('ani.session.generation',SESSION_GENERATION)", script)
+        self.assertNotIn('MAX_SESSION_TURNS', script)
+        session_fn = script[script.index('function sessionForNextTurn()'):script.index("player.addEventListener('ended'", script.index('function sessionForNextTurn()'))]
+        self.assertNotIn('localStorage.removeItem(sessionKey)', session_fn)
+        self.assertIn('return {sessionId,turnNumber:turns+1}', session_fn)
+
+    def test_pwa_migrates_existing_francois_model_choice_to_text_model(self):
+        script = (ROOT / 'static' / 'app.js').read_text()
+        self.assertIn("const MODEL_SELECTION_GENERATION='2'", script)
+        self.assertIn("localStorage.removeItem('ani.model.francois')", script)
+
+    def test_companion_overlay_preserves_the_user_language(self):
+        overlay = app_module.build_companion_system_overlay('Melissa')
+        self.assertIn('langue dominante du dernier message', overlay)
+        self.assertIn('Si son message est en français', overlay)
+        self.assertIn('s’il est en anglais', overlay)
+        self.assertIn('Pour un message mélangé', overlay)
 
     def test_failed_streaming_audio_chunk_is_skipped_without_stopping_later_chunks(self):
         script = (ROOT / 'static' / 'app.js').read_text()
@@ -278,9 +414,19 @@ class AniCompanionTests(unittest.TestCase):
         self.assertIn('ensurePrefetch();', run_block)
         self.assertIn('continue;', run_block)
 
+    def test_audio_completion_is_polled_when_browser_omits_ended_event(self):
+        script = (ROOT / 'static' / 'app.js').read_text()
+        wait_start = script.index('function waitForAudioStop(turnId)')
+        wait_block = script[wait_start:wait_start + 1800]
+        self.assertIn('setInterval(', wait_block)
+        self.assertIn("finish({type:'poll'})", wait_block)
+        self.assertIn("finish({type:'timeout'})", wait_block)
+        self.assertIn('clearInterval(completionPoll)', wait_block)
+
     def test_pwa_uses_structured_reply_metadata(self):
         script = (ROOT / 'static' / 'app.js').read_text()
         self.assertIn('completed.actions', script)
+        self.assertIn("reportAudioTiming('avatar.motion.dispatched'", script)
         self.assertIn('setEmotion(completed.emotion)', script)
         self.assertIn('activeAssistantBubble.textContent=completed.reply', script)
         self.assertNotIn('motionForText(completed.reply)', script)
@@ -338,6 +484,7 @@ class AniCompanionTests(unittest.TestCase):
                     {'jsonrpc': '2.0', 'id': '1', 'result': {
                         'session_id': 'runtime-1',
                         'stored_session_id': 'stored-1',
+                        'info': {'model': 'ani-gemma4:latest', 'provider': 'custom'},
                     }},
                     {'jsonrpc': '2.0', 'id': '2', 'result': {'scope': 'session', 'value': 'ani-gemma4:latest'}},
                     {'jsonrpc': '2.0', 'method': 'event', 'params': {
@@ -346,6 +493,11 @@ class AniCompanionTests(unittest.TestCase):
                         'payload': {'text': '(French) Bonjour François, je suis bien là. '},
                     }},
                     {'jsonrpc': '2.0', 'id': '3', 'result': {'status': 'streaming'}},
+                    {'jsonrpc': '2.0', 'method': 'event', 'params': {
+                        'type': 'session.usage',
+                        'session_id': 'runtime-1',
+                        'payload': {'usage': {'context_used': 17000, 'context_max': 65000}},
+                    }},
                     {'jsonrpc': '2.0', 'method': 'event', 'params': {
                         'type': 'message.delta',
                         'session_id': 'runtime-1',
@@ -394,14 +546,15 @@ class AniCompanionTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         events = [json.loads(line) for line in response.text.splitlines()]
         event_types = [event['type'] for event in events]
-        self.assertEqual(event_types, ['start', 'delta', 'speech', 'delta', 'phase', 'phase', 'delta', 'speech', 'complete'])
+        self.assertEqual(event_types, ['start', 'delta', 'speech', 'context', 'delta', 'phase', 'phase', 'delta', 'speech', 'complete'])
+        self.assertEqual(events[3], {'type': 'context', 'used': 17000, 'max': 65000})
         self.assertLess(event_types.index('speech'), event_types.index('complete'))
         self.assertEqual(events[0]['session_id'], 'stored-1')
         self.assertEqual(events[2]['text'], 'Bonjour François, je suis bien là.')
-        self.assertEqual(events[4], {'type': 'phase', 'phase': 'compression'})
-        self.assertEqual(events[5], {'type': 'phase', 'phase': 'llm'})
-        self.assertEqual(events[6]['text'], ' complète.')
-        self.assertEqual(events[7]['text'], 'Deuxième phrase complète.')
+        self.assertEqual(events[5], {'type': 'phase', 'phase': 'compression'})
+        self.assertEqual(events[6], {'type': 'phase', 'phase': 'llm'})
+        self.assertEqual(events[7]['text'], ' complète.')
+        self.assertEqual(events[8]['text'], 'Deuxième phrase complète.')
         self.assertEqual(events[-1]['reply'], 'Bonjour François, je suis bien là. Deuxième phrase complète.')
         process_call = create_process.await_args_list[0]
         process_env = process_call.kwargs['env']
@@ -410,16 +563,102 @@ class AniCompanionTests(unittest.TestCase):
         self.assertIn(app_module.HERMES_AGENT_ROOT, process_env['PYTHONPATH'].split(os.pathsep))
         self.assertEqual(process_env['HERMES_MODEL'], 'ani-gemma4:latest')
         self.assertEqual(process_env['HERMES_INFERENCE_PROVIDER'], 'custom')
-        self.assertEqual(process_env['HERMES_TUI_TOOLSETS'], 'memory')
+        self.assertEqual(process_env['HERMES_TUI_TOOLSETS'], 'memory,web')
+        self.assertIn("tu t'appelles", process_env['HERMES_EPHEMERAL_SYSTEM_PROMPT'])
+        self.assertIn(
+            "première phrase complète, naturelle et d'environ dix mots maximum",
+            process_env['HERMES_EPHEMERAL_SYSTEM_PROMPT'],
+        )
+        self.assertIn(
+            'requête non vide et explicite',
+            process_env['HERMES_EPHEMERAL_SYSTEM_PROMPT'],
+        )
+        self.assertIn(
+            'année courante',
+            process_env['HERMES_EPHEMERAL_SYSTEM_PROMPT'],
+        )
+        self.assertIn(
+            'sources officielles',
+            process_env['HERMES_EPHEMERAL_SYSTEM_PROMPT'],
+        )
         requests = [json.loads(raw) for raw in fake_process.stdin.writes]
         self.assertEqual(requests[0]['method'], 'session.resume')
         self.assertEqual(requests[0]['params']['session_id'], 'stored-1')
-        self.assertEqual(requests[1]['method'], 'config.set')
-        self.assertEqual(requests[1]['params']['session_id'], 'runtime-1')
-        self.assertEqual(requests[1]['params']['value'], 'ani-gemma4:latest --provider custom --session')
-        self.assertEqual(requests[2]['method'], 'prompt.submit')
-        expected_name = app_module.load_avatar_persona('francois')['display_name']
-        self.assertEqual(requests[2]['params']['text'], app_module.build_streaming_prompt('Dis deux phrases.', expected_name))
+        self.assertNotIn('config.set', [request['method'] for request in requests])
+        self.assertEqual(requests[1]['method'], 'prompt.submit')
+        self.assertEqual(
+            requests[1]['params']['text'],
+            app_module.build_streaming_prompt('Dis deux phrases.', 'Ani'),
+        )
+
+    def test_chat_stream_relays_web_tool_lifecycle(self):
+        start = app_module.gateway_tool_event('tool.start', {
+            'name': 'web_search',
+            'context': 'une information obscure',
+        })
+        complete = app_module.gateway_tool_event('tool.complete', {
+            'name': 'web_search',
+            'duration_s': 2.4,
+        })
+        self.assertEqual(start, {
+            'type': 'tool',
+            'state': 'start',
+            'name': 'web_search',
+            'context': 'une information obscure',
+        })
+        self.assertEqual(complete, {
+            'type': 'tool',
+            'state': 'complete',
+            'name': 'web_search',
+            'duration_s': 2.4,
+        })
+
+    def test_steer_endpoint_writes_session_steer_without_stopping_process(self):
+        class FakeStdin:
+            def __init__(self):
+                self.writes = []
+
+            def write(self, data):
+                self.writes.append(data)
+
+            async def drain(self):
+                return None
+
+        process = MagicMock()
+        process.stdin = FakeStdin()
+        process.returncode = None
+        app_module.ACTIVE_CHAT_SESSIONS['server-steer-secret'] = {
+            'process': process,
+            'runtime_session_id': 'runtime-steer',
+        }
+        try:
+            response = TestClient(app).post('/api/chat/steer', json={
+                'turn_key': 'server-steer-secret',
+                'message': 'Prends aussi en compte les sources françaises.',
+            })
+        finally:
+            app_module.ACTIVE_CHAT_SESSIONS.pop('server-steer-secret', None)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {'status': 'queued'})
+        request = json.loads(process.stdin.writes[0])
+        self.assertEqual(request['method'], 'session.steer')
+        self.assertEqual(request['params'], {
+            'session_id': 'runtime-steer',
+            'text': 'Prends aussi en compte les sources françaises.',
+        })
+        process.terminate.assert_not_called()
+
+    def test_model_switch_is_only_needed_when_runtime_route_differs(self):
+        self.assertFalse(app_module.should_switch_model(
+            {'info': {'model': 'ani-gemma4:latest', 'provider': 'custom'}},
+            'ani-gemma4:latest',
+            'custom',
+        ))
+        self.assertTrue(app_module.should_switch_model(
+            {'info': {'model': 'ancien-modele:latest', 'provider': 'custom'}},
+            'ani-gemma4:latest',
+            'custom',
+        ))
 
     def test_gateway_stderr_drain_keeps_only_a_bounded_tail(self):
         async def scenario():
@@ -558,12 +797,25 @@ class AniCompanionTests(unittest.TestCase):
         self.assertIn('voice', body)
         self.assertEqual(client.get('/api/persona', params={'profile': 'x'}).status_code, 422)
 
-    def test_streaming_prompt_injects_alternate_identity(self):
-        prompt = app_module.build_streaming_prompt('Salut.', 'Luna')
-        self.assertIn("tu t'appelles Luna", prompt)
-        self.assertIn('sans jamais dire Ani', prompt)
-        default_prompt = app_module.build_streaming_prompt('Salut.')
-        self.assertNotIn("tu t'appelles", default_prompt)
+    def test_selected_avatar_controls_companion_name(self):
+        persona = app_module.load_avatar_persona('francois')
+        self.assertEqual(app_module.companion_name_for_avatar(persona, 'Erin.glb'), 'Erin')
+        self.assertEqual(app_module.companion_name_for_avatar(persona, 'Melissa.glb'), 'Melissa')
+        self.assertEqual(app_module.companion_name_for_avatar(persona, '../Evil.glb'), 'Melissa')
+
+    def test_chat_request_sends_selected_avatar_identity(self):
+        script = (ROOT / 'static' / 'app.js').read_text()
+        self.assertIn('avatar:avatarSelector?.value||persona.avatar', script)
+        self.assertNotIn('avatarModelSelect', script)
+        source = (ROOT / 'app.py').read_text()
+        self.assertIn("persona['display_name'] = companion_name_for_avatar(persona, payload.avatar)", source)
+
+    def test_companion_system_overlay_injects_alternate_identity(self):
+        overlay = app_module.build_companion_system_overlay('Luna')
+        self.assertIn("tu t'appelles Luna", overlay)
+        self.assertIn('sans jamais dire Ani', overlay)
+        default_overlay = app_module.build_companion_system_overlay('Ani')
+        self.assertNotIn("tu t'appelles", default_overlay)
 
     def test_tts_uses_persona_voice_from_config(self):
         request = app_module.build_qwen_tts_request('Bonjour.', '', 'Vivian')
@@ -700,15 +952,27 @@ class AniCompanionTests(unittest.TestCase):
         self.assertIn('autocorrect="off"', html)
         self.assertIn('spellcheck="false"', html)
 
+    def test_portrait_stage_does_not_dim_lower_avatar(self):
+        css = (ROOT / 'static' / 'style.css').read_text()
+        self.assertNotIn('.stage:after', css)
+        self.assertIn('#17121c 100%', css)
+
     def test_avatar_camera_uses_upper_body_framing(self):
         source = (ROOT / 'src' / 'avatar-3d.js').read_text()
         self.assertIn('UPPER_BODY_HEIGHT_RATIO = 0.38', source)
         self.assertIn('UPPER_BODY_VERTICAL_OFFSET = 0.1', source)
         self.assertIn('upperTargetY + UPPER_BODY_VERTICAL_OFFSET', source)
 
+    def test_avatar_has_lower_body_fill_light(self):
+        source = (ROOT / 'src' / 'avatar-3d.js').read_text()
+        self.assertIn('const lowerFillLight = new THREE.PointLight(0xffd6e4, 40, 2.4, 2)', source)
+        self.assertIn('lowerFillLight.position.set(0, -0.9, -0.35)', source)
+        self.assertIn('camera.add(keyLight, rimLight, fillLight, lowerFillLight)', source)
+        self.assertIn('lowerFill: lowerFillLight.getWorldPosition', source)
+
     def test_avatar_lighting_follows_camera_and_action_target(self):
         source = (ROOT / 'src' / 'avatar-3d.js').read_text()
-        self.assertIn('camera.add(keyLight, rimLight)', source)
+        self.assertIn('camera.add(keyLight, rimLight, fillLight, lowerFillLight)', source)
         self.assertIn('lightTarget.position.copy(controls.target)', source)
         self.assertIn('getLightingState', source)
 
@@ -718,7 +982,7 @@ class AniCompanionTests(unittest.TestCase):
         self.assertIn('OrbitControls', source)
         self.assertIn('scheduleCameraReturn', source)
         self.assertIn('getCameraState', source)
-        self.assertIn("canvas.addEventListener('pointerup'", source)
+        self.assertIn('canvas.addEventListener("pointerup"', source)
         self.assertIn('touch-action:none', css)
 
     def test_microphone_permission_and_errors_are_handled(self):
@@ -803,6 +1067,16 @@ class AniCompanionTests(unittest.TestCase):
         self.assertTrue(cancelled)
         self.assertNotIn('server-tts-secret', app_module.ACTIVE_TTS_TASKS)
 
+    def test_status_announcements_drive_avatar_lip_sync(self):
+        script = (ROOT / 'static' / 'app.js').read_text()
+        self.assertIn('let statusAudioEnvelope=[]', script)
+        self.assertIn('const envelopePromise=buildAudioEnvelope(blob)', script)
+        self.assertIn('startStatusLipSync(await envelopePromise)', script)
+        self.assertIn('Math.floor(statusPlayer.currentTime*ENVELOPE_FPS)', script)
+        self.assertIn('function stopStatusLipSync()', script)
+        stop_notice = script[script.index('function stopStatusNotice()'):script.index('async function playStatusNotice')]
+        self.assertIn('stopStatusLipSync()', stop_notice)
+
     def test_tts_request_is_registered_for_turn_cancellation(self):
         source = (ROOT / 'app.py').read_text()
         self.assertIn('ACTIVE_TTS_TASKS', source)
@@ -818,8 +1092,16 @@ class AniCompanionTests(unittest.TestCase):
 
     def test_avatar_uses_dark_lighting_and_lighter_emerald_irises(self):
         source = (ROOT / 'src' / 'avatar-3d.js').read_text()
-        self.assertIn('renderer.toneMappingExposure = 0.82', source)
-        self.assertIn("material.name.includes('EyeIris')", source)
+        self.assertIn('renderer.toneMappingExposure = 1.0', source)
+        self.assertIn('renderer.toneMappingExposure = isGlb ? 1.0 : 0.68', source)
+        self.assertIn('keyLight.intensity = isGlb ? 1.45 : 0.75', source)
+        self.assertIn('fillLight.intensity = isGlb ? 1.05 : 0.35', source)
+        self.assertIn('lowerFillLight.intensity = isGlb ? 40 : 2', source)
+        self.assertIn('const previewMaterial = new THREE.MeshBasicMaterial', source)
+        self.assertIn('map: material.map || material.emissiveMap', source)
+        self.assertIn('previewMaterial.toneMapped = false', source)
+        self.assertIn('object.material = previewMaterial', source)
+        self.assertIn('material.name.includes("EyeIris")', source)
         self.assertIn('0x6ee7b7', source)
         self.assertIn('material.emissive.setHex(0x34d399)', source)
         self.assertIn('material.emissiveIntensity = 0.16', source)
@@ -828,9 +1110,9 @@ class AniCompanionTests(unittest.TestCase):
 
     def test_lip_sync_limits_wide_mouth_shapes(self):
         source = (ROOT / 'src' / 'avatar-3d.js').read_text()
-        self.assertIn('MAX_MOUTH_OPEN = 0.40', source)
-        self.assertIn("expression('ih', mouthOpen * 0.08)", source)
-        self.assertIn("happy: ['happy', 0.72]", source)
+        self.assertIn('MAX_MOUTH_OPEN = 0.4', source)
+        self.assertIn('expression("ih", mouthOpen * 0.08)', source)
+        self.assertIn('happy: ["happy", 0.72]', source)
 
     def test_avatar_moves_head_subtly_while_speaking(self):
         source = (ROOT / 'src' / 'avatar-3d.js').read_text()
@@ -842,13 +1124,23 @@ class AniCompanionTests(unittest.TestCase):
     def test_avatar_exposes_dance_spin_jump_and_sway_motions(self):
         source = (ROOT / 'src' / 'avatar-3d.js').read_text()
         self.assertIn('function playMotion', source)
-        for motion in ("'dance'", "'spin'", "'jump'", "'sway'", "'tease'"):
+        for motion in ('"dance"', '"spin"', '"jump"', '"sway"', '"tease"'):
             self.assertIn(motion, source)
-        self.assertIn('window.aniAvatar = { setEmotion, setMouthOpen, playMotion', source)
+        self.assertIn('dance: 10000', source)
+        self.assertIn('window.aniAvatar = {', source)
+        self.assertIn('setMouthOpen,', source)
+        self.assertIn('playMotion,', source)
+
+    def test_boom_dance_is_excluded_from_random_dances(self):
+        source = (ROOT / 'src' / 'avatar-3d.js').read_text()
+        self.assertIn('const excludedMotionClips = new Set(["Boom_Dance"])', source)
+        self.assertIn('!excludedMotionClips.has(clip.name)', source)
+        self.assertNotIn('tease: "dance"', source)
+        self.assertIn('const proceduralOnly = name === "tease"', source)
 
     def test_large_avatar_motions_use_full_body_camera_framing(self):
         source = (ROOT / 'src' / 'avatar-3d.js').read_text()
-        self.assertIn("['dance', 'spin', 'jump'].includes(name)", source)
+        self.assertIn('["dance", "spin", "jump"].includes(name)', source)
         self.assertIn('const fullBodySpan = Math.max(size.y', source)
         self.assertIn('ACTION_CAMERA_VERTICAL_OFFSET = 0.25', source)
         self.assertIn('center.y + ACTION_CAMERA_VERTICAL_OFFSET', source)
@@ -866,7 +1158,8 @@ class AniCompanionTests(unittest.TestCase):
         html = (ROOT / 'static' / 'index.html').read_text()
         self.assertIn("input.value='';setEmotion('curious');setPhase('llm')", script)
         self.assertIn("if(isLandscapeLayout())pushLandscapeMessage(message,'user');", script)
-        self.assertIn("else{history.replaceChildren();bubble(message,'user')}", script)
+        self.assertIn('if(replacePortrait)history.replaceChildren();', script)
+        self.assertIn('showUserMessage(message);', script)
         self.assertIn("bubble(display,'ani')", script)
         self.assertNotIn('id="speech"', html)
 
@@ -898,10 +1191,37 @@ class AniCompanionTests(unittest.TestCase):
         response = client.post('/api/stt', content=b'', headers={'content-type': 'audio/mp4'})
         self.assertEqual(response.status_code, 422)
 
-    def test_service_worker_precaches_avatar_runtime(self):
+    def test_service_worker_precaches_avatar_runtime_without_intercepting_large_models(self):
         worker = (ROOT / 'static' / 'sw.js').read_text()
-        self.assertIn("const CACHE='ani-companion-v49'", worker)
-        self.assertIn("'/avatar-3d.bundle.js?v=49'", worker)
+        self.assertIn("const CACHE='ani-companion-v92'", worker)
+        self.assertIn("'/avatar-3d.bundle.js?v=68'", worker)
+        self.assertIn("url.pathname.startsWith('/models/')", worker)
+
+    def test_avatar_loading_retries_transient_failures_and_offers_manual_retry(self):
+        avatar_source = (ROOT / 'src' / 'avatar-3d.js').read_text()
+        self.assertIn('const AVATAR_LOAD_MAX_ATTEMPTS = 3', avatar_source)
+        self.assertIn('tryLoad(attempt + 1)', avatar_source)
+        self.assertIn('`?retry=${Date.now()}-${attempt}`', avatar_source)
+        self.assertIn('loading.onclick = () => loadAvatar(safe)', avatar_source)
+        self.assertIn('reportAvatarLoad("avatar.load.failed"', avatar_source)
+
+    def test_profile_picker_and_interface_name_melissa(self):
+        html = (ROOT / 'static' / 'index.html').read_text()
+        self.assertIn('Qui parle à Melissa ?', html)
+        self.assertIn('<title>Melissa</title>', html)
+        self.assertIn('<div><strong>Melissa</strong></div>', html)
+
+    def test_profile_picker_has_a_valid_melissa_avatar_fallback(self):
+        avatar_source = (ROOT / 'src' / 'avatar-3d.js').read_text()
+        self.assertIn('localStorage.getItem(`ani.avatar.${profile}`) || "Melissa.glb"', avatar_source)
+        self.assertNotIn('localStorage.getItem(`ani.avatar.${profile}`) || "ani.vrm"', avatar_source)
+
+    def test_identity_migration_clears_profile_specific_sessions(self):
+        script = (ROOT / 'static' / 'app.js').read_text()
+        self.assertIn("const SESSION_GENERATION='7'", script)
+        self.assertIn("for(const profile of ['francois','salome'])", script)
+        self.assertIn('localStorage.removeItem(`ani.session.${profile}`)', script)
+        self.assertIn('localStorage.removeItem(`ani.session.turns.${profile}`)', script)
 
     def test_service_worker_activates_pipeline_update_immediately(self):
         worker = (ROOT / 'static' / 'sw.js').read_text()
@@ -912,11 +1232,20 @@ class AniCompanionTests(unittest.TestCase):
     def test_interface_assets_are_cache_busted_for_installed_pwa(self):
         html = (ROOT / 'static' / 'index.html').read_text()
         worker = (ROOT / 'static' / 'sw.js').read_text()
-        self.assertIn('href="/style.css?v=33"', html)
-        self.assertIn('src="/app.js?v=43"', html)
-        self.assertIn('src="/avatar-3d.bundle.js?v=49"', html)
-        self.assertIn("'/style.css?v=33'", worker)
-        self.assertIn("'/app.js?v=43'", worker)
+        self.assertIn('href="/style.css?v=40"', html)
+        self.assertIn('src="/app.js?v=63"', html)
+        self.assertIn('src="/avatar-3d.bundle.js?v=68"', html)
+        self.assertIn("'/style.css?v=40'", worker)
+        self.assertIn("'/app.js?v=63'", worker)
+        self.assertIn("'/avatar-3d.bundle.js?v=68'", worker)
+
+    def test_visible_pwa_keeps_screen_awake_and_reacquires_lock(self):
+        javascript = (ROOT / 'static' / 'app.js').read_text()
+        self.assertIn("navigator.wakeLock.request('screen')", javascript)
+        self.assertIn("document.visibilityState!=='visible'", javascript)
+        self.assertIn("window.addEventListener('pageshow'", javascript)
+        self.assertIn("document.addEventListener('visibilitychange'", javascript)
+        self.assertIn("document.addEventListener('pointerdown'", javascript)
 
     def test_phase_timer_does_not_flood_accessibility_announcements(self):
         html = (ROOT / 'static' / 'index.html').read_text()
@@ -928,17 +1257,28 @@ class AniCompanionTests(unittest.TestCase):
     def test_manifest_is_installable_pwa(self):
         manifest = json.loads((ROOT / 'static' / 'manifest.webmanifest').read_text())
         self.assertEqual(manifest['display'], 'standalone')
-        self.assertEqual(manifest['name'], 'Ani Companion')
+        self.assertEqual(manifest['name'], 'Melissa Companion')
         self.assertTrue(any(icon['sizes'] == '512x512' for icon in manifest['icons']))
         html = (ROOT / 'static' / 'index.html').read_text()
-        self.assertIn('rel="apple-touch-icon" href="/icons/ani-192.png"', html)
-        self.assertIn('rel="icon" href="/icons/ani-192.png"', html)
+        self.assertIn('rel="apple-touch-icon" href="/icons/melissa-192.png"', html)
+        self.assertIn('rel="icon" href="/icons/melissa-192.png"', html)
 
     def test_interface_has_avatar_chat_voice_and_install_controls(self):
         html = (ROOT / 'static' / 'index.html').read_text()
         for required in ('ani-avatar', 'chat-form', 'mic-button', 'context-meter', 'install-button'):
             self.assertIn(f'id="{required}"', html)
         self.assertIn('serviceWorker.register', html)
+
+    def test_context_meter_waits_for_real_gateway_usage(self):
+        script = (ROOT / 'static' / 'app.js').read_text()
+        self.assertIn("Contexte: mesure en attente", script)
+        self.assertIn("if(event.type==='context')", script)
+        self.assertNotIn('function estimateContextTokens()', script)
+
+    def test_topbar_omits_redundant_presence_indicator(self):
+        html = (ROOT / 'static' / 'index.html').read_text()
+        self.assertNotIn('id="status"', html)
+        self.assertNotIn('présente</span>', html)
 
     def test_profile_picker_offers_francois_and_salome(self):
         html = (ROOT / 'static' / 'index.html').read_text()
@@ -956,7 +1296,7 @@ class AniCompanionTests(unittest.TestCase):
         self.assertIn("'salome'", source)
         self.assertIn("if payload.profile not in HERMES_PROFILES", source)
 
-    def test_models_catalog_lists_only_fast_companion_models(self):
+    def test_models_catalog_lists_available_companion_models(self):
         client = TestClient(app)
         response = client.get('/api/models')
         self.assertEqual(response.status_code, 200)
@@ -965,9 +1305,34 @@ class AniCompanionTests(unittest.TestCase):
         self.assertEqual(ids, {
             'ani-gemma4-vision:latest',
             'ani-gemma4:latest',
+            'ani-qwen38:latest',
         })
         for model in catalog['models']:
             self.assertIsInstance(model['vision'], bool)
+
+    def test_text_turn_respects_selected_vision_model(self):
+        async def scenario():
+            with patch.object(app_module, 'fetch_local_models', return_value=[
+                {'id': 'ani-gemma4:latest', 'vision': False},
+                {'id': 'ani-gemma4-vision:latest', 'vision': True},
+            ]):
+                return await app_module.resolve_model_async(
+                    'ani-gemma4-vision:latest', has_image=False
+                )
+
+        self.assertEqual(asyncio.run(scenario()), 'ani-gemma4-vision:latest')
+
+    def test_image_turn_uses_the_vision_model_automatically(self):
+        async def scenario():
+            with patch.object(app_module, 'fetch_local_models', return_value=[
+                {'id': 'ani-gemma4:latest', 'vision': False},
+                {'id': 'ani-gemma4-vision:latest', 'vision': True},
+            ]):
+                return await app_module.resolve_model_async(
+                    'ani-gemma4:latest', has_image=True
+                )
+
+        self.assertEqual(asyncio.run(scenario()), 'ani-gemma4-vision:latest')
 
     def test_chat_stream_rejects_unknown_model(self):
         client = TestClient(app)
@@ -992,7 +1357,7 @@ class AniCompanionTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(any('"start"' in line for line in response.text.splitlines()))
 
-    def test_selected_model_overrides_env_model_for_gateway(self):
+    def test_selected_vision_model_overrides_text_gateway(self):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
@@ -1062,7 +1427,8 @@ class AniCompanionTests(unittest.TestCase):
         script = (ROOT / 'static' / 'app.js').read_text()
         html = (ROOT / 'static' / 'index.html').read_text()
         self.assertIn('id="model-selector"', html)
-        self.assertIn('ani.model.${currentProfile}', script)
+        self.assertIn('const modelStorageKey=()=>`ani.model.${currentProfile}`', script)
+        self.assertIn('localStorage.getItem(modelStorageKey())', script)
         self.assertIn("fetch('/api/models'", script)
         self.assertIn('profile:currentProfile', script)
 
@@ -1070,6 +1436,17 @@ class AniCompanionTests(unittest.TestCase):
         script = (ROOT / 'static' / 'app.js').read_text()
         self.assertIn('refreshModelSelector', script)
         self.assertIn('else{refreshModelSelector();refreshAvatarSelector();refreshVoiceSelector()}', script)
+
+    def test_capture_buttons_follow_selected_model_vision_capability(self):
+        html = (ROOT / 'static' / 'index.html').read_text()
+        script = (ROOT / 'static' / 'app.js').read_text()
+        self.assertIn('id="camera-button"', html)
+        self.assertIn('id="screen-button"', html)
+        self.assertIn('aria-disabled="true"', html)
+        self.assertIn('function updateVisionControls()', script)
+        self.assertIn('const enabled=Boolean(selected?.vision)', script)
+        self.assertIn('for(const button of [cameraButton,screenButton])', script)
+        self.assertIn('button.disabled=!enabled', script)
 
 
 if __name__ == '__main__':

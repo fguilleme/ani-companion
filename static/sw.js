@@ -1,5 +1,5 @@
-const CACHE='ani-companion-v49';
-const ASSETS=['/','/style.css?v=33','/app.js?v=43','/avatar-3d.bundle.js?v=49','/manifest.webmanifest','/icons/ani-192.png','/icons/ani-512.png'];
+const CACHE='ani-companion-v92';
+const ASSETS=['/','/style.css?v=40','/app.js?v=63','/avatar-3d.bundle.js?v=68','/manifest.webmanifest','/icons/melissa-192.png','/icons/melissa-512.png'];
 self.addEventListener('install',event=>event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(ASSETS)).then(()=>self.skipWaiting())));
 self.addEventListener('activate',event=>event.waitUntil(
   caches.keys()
@@ -7,6 +7,7 @@ self.addEventListener('activate',event=>event.waitUntil(
     .then(()=>self.clients.claim())
 ));
 self.addEventListener('fetch',event=>{
-  if(event.request.method!=='GET'||new URL(event.request.url).pathname.startsWith('/api/')) return;
+  const url=new URL(event.request.url);
+  if(event.request.method!=='GET'||url.pathname.startsWith('/api/')||url.pathname.startsWith('/models/')) return;
   event.respondWith(fetch(event.request).then(response=>{const copy=response.clone();caches.open(CACHE).then(cache=>cache.put(event.request,copy));return response}).catch(()=>caches.match(event.request)));
 });

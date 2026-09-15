@@ -4,7 +4,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 const server = spawn('/home/francois/.hermes/hermes-agent/venv/bin/python', [
   '-m', 'uvicorn', 'app:app', '--host', '127.0.0.1', '--port', '8791',
-], { cwd: '/home/francois/ani-companion', stdio: ['ignore', 'pipe', 'pipe'] });
+], { cwd: '/home/francois/projects/ani-companion', stdio: ['ignore', 'pipe', 'pipe'] });
 
 const fail = (message) => { throw new Error(message); };
 const distance = (a, b) => Math.sqrt(a.reduce((sum, value, index) => sum + (value - b[index]) ** 2, 0));

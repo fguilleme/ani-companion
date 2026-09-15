@@ -15,18 +15,46 @@ const profilePicker=document.getElementById('profile-picker');
 const phaseIndicator=document.getElementById('phase-indicator');
 const phaseLabel=phaseIndicator.querySelector('.phase-label');
 const phaseTime=phaseIndicator.querySelector('time');
-const SESSION_GENERATION='4';
-const MAX_SESSION_TURNS=12;
+const SESSION_GENERATION='7';
+const MODEL_SELECTION_GENERATION='2';
 let currentProfile=localStorage.getItem('ani.profile')||'';
 if(localStorage.getItem('ani.session.generation')!==SESSION_GENERATION){
-localStorage.removeItem('ani.session');
-localStorage.removeItem('ani.session.turns');
-localStorage.setItem('ani.session.generation',SESSION_GENERATION);
+  localStorage.removeItem('ani.session');
+  localStorage.removeItem('ani.session.turns');
+  for(const profile of ['francois','salome']){
+    localStorage.removeItem(`ani.session.${profile}`);
+    localStorage.removeItem(`ani.session.turns.${profile}`);
+  }
+  localStorage.setItem('ani.session.generation',SESSION_GENERATION);
+}
+if(localStorage.getItem('ani.model.generation')!==MODEL_SELECTION_GENERATION){
+  localStorage.removeItem('ani.model.francois');
+  localStorage.setItem('ani.model.generation',MODEL_SELECTION_GENERATION);
 }
 let voiceEnabled=localStorage.getItem('ani.voice')!=='off';
 let persona={display_name:'Ani',avatar:null,voice:null};
 let selectedAvatarName='';
 let deferredInstall=null;
+let screenWakeLock=null;
+let wakeLockRetryTimer=null;
+
+async function keepScreenAwake(){
+  clearTimeout(wakeLockRetryTimer);wakeLockRetryTimer=null;
+  if(document.visibilityState!=='visible'||!navigator.wakeLock?.request)return false;
+  if(screenWakeLock&&!screenWakeLock.released)return true;
+  try{
+    const lock=await navigator.wakeLock.request('screen');
+    screenWakeLock=lock;
+    lock.addEventListener('release',()=>{
+      if(screenWakeLock===lock)screenWakeLock=null;
+      if(document.visibilityState==='visible')wakeLockRetryTimer=setTimeout(()=>void keepScreenAwake(),1000);
+    },{once:true});
+    return true;
+  }catch(error){
+    console.warn('[ANI] Verrouillage écran indisponible',error);
+    return false;
+  }
+}
 
 function setEmotion(emotion='neutral'){
   [...avatar.classList].filter(x=>x.startsWith('emotion-')).forEach(x=>avatar.classList.remove(x));
@@ -93,11 +121,15 @@ const ENVELOPE_FPS=60;
 const SILENT_WAV='data:audio/wav;base64,UklGRkQDAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YSADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==';
 let audioEnvelope=[];
 let mouthFrame=null;
+let statusAudioEnvelope=[];
+let statusMouthFrame=null;
 let audioUnlocked=false;
 let audioUnlockPromise=null;
 let activeTurnId=0;
 let activeTurnKey=null;
 let aniTurnActive=false;
+const activeToolNames=new Set();
+let toolNoticeTimer=null;
 let chatController=null;
 let ttsController=null;
 let streamingSpeech=null;
@@ -113,6 +145,7 @@ let statusAudioUrl=null;
 let statusController=null;
 let statusNoticeToken=0;
 let currentStatusKind=null;
+let deferredStatusNoticeKind=null;
 let statusTurnKey=null;
 let contextTokensUsed=0;
 let contextTokensMax=65000;
@@ -131,6 +164,15 @@ const STATUS_PHRASES={
     'Une petite seconde, mon cerveau démarre doucement.',
     'Je sors du brouillard. Le café imaginaire arrive.',
   ],
+  searching:[
+    'Je suis en train de chercher, je te réponds dès que j’ai trouvé.',
+    'Je lance la recherche et je reviens avec le résultat.',
+    'Je cherche ça, garde-moi tes précisions pendant ce temps.',
+  ],
+  working:[
+    'Je m’en occupe, ça prend juste un petit moment.',
+    'Je travaille dessus et je te donne le résultat dès que je l’ai.',
+  ],
 };
 const lastStatusPhrase={};
 
@@ -148,7 +190,7 @@ function renderPhaseTime(){
   phaseTime.textContent=`${String(Math.floor(seconds/60)).padStart(2,'0')}:${String(seconds%60).padStart(2,'0')}`;
 }
 function setPhase(phase='idle'){
-  const labels={idle:'Prête',transcription:'Transcription',llm:`${avatarName()} réfléchit`,answering:`${avatarName()} répond`,compression:`${avatarName()} organise ses souvenirs`};
+  const labels={idle:'Prête',transcription:'Transcription',llm:`${avatarName()} réfléchit`,answering:`${avatarName()} répond`,tool:`${avatarName()} utilise un outil`,compression:`${avatarName()} organise ses souvenirs`};
   const changed=phaseIndicator.dataset.phase!==phase;
   phaseIndicator.dataset.phase=phase;phaseLabel.textContent=labels[phase]||phase;
   phaseIndicator.setAttribute('aria-label',labels[phase]||phase);
@@ -159,7 +201,12 @@ function setPhase(phase='idle'){
 function updateContextMeter(used,max){
   if(!contextMeterFill)return;
   contextTokensUsed=used;contextTokensMax=max;
+  if(currentProfile){
+    localStorage.setItem(`ani.context.used.${currentProfile}`,String(used));
+    localStorage.setItem(`ani.context.max.${currentProfile}`,String(max));
+  }
   const pct=Math.min(100,Math.round((used/max)*100));
+  contextMeterFill.style.opacity='1';
   contextMeterFill.style.width=`${pct}%`;
   contextMeter.setAttribute('aria-valuenow',String(pct));
   contextMeter.setAttribute('aria-label',`Contexte: ${used} / ${max} tokens (${pct}%)`);
@@ -167,14 +214,19 @@ function updateContextMeter(used,max){
   else if(pct>70)contextMeterFill.style.background='#ffbd68';
   else contextMeterFill.style.background='var(--accent)';
 }
-function estimateContextTokens(){
-  const turns=Math.max(0,Number.parseInt(localStorage.getItem(`ani.session.turns.${currentProfile}`)||'0',10)||0);
-  const baseTokens=3000;
-  const tokensPerTurn=1200;
-  return Math.min(contextTokensMax,baseTokens+turns*tokensPerTurn);
+function showPendingContextMeter(){
+  if(!contextMeterFill)return;
+  contextMeterFill.style.width='18%';
+  contextMeterFill.style.opacity='.4';
+  contextMeterFill.style.background='var(--accent)';
+  contextMeter.removeAttribute('aria-valuenow');
+  contextMeter.setAttribute('aria-label','Contexte: mesure en attente');
 }
 function refreshContextMeter(){
-  updateContextMeter(estimateContextTokens(),contextTokensMax);
+  const used=Math.max(0,Number.parseInt(localStorage.getItem(`ani.context.used.${currentProfile}`)||'0',10)||0);
+  if(!used){showPendingContextMeter();return}
+  const maximum=Math.max(1,Number.parseInt(localStorage.getItem(`ani.context.max.${currentProfile}`)||String(contextTokensMax),10)||contextTokensMax);
+  updateContextMeter(used,maximum);
 }
 function randomStatusPhrase(kind){
   const phrases=STATUS_PHRASES[kind]||[];
@@ -186,6 +238,7 @@ function randomStatusPhrase(kind){
 }
 function stopStatusNotice(){
   statusNoticeToken++;currentStatusKind=null;
+  stopStatusLipSync();
   if(statusTurnKey){fetch('/api/tts/cancel',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({turn_key:statusTurnKey}),keepalive:true}).catch(()=>{});statusTurnKey=null}
   statusController?.abort();statusController=null;statusPlayer.pause();statusPlayer.removeAttribute('src');statusPlayer.load();
   if(statusAudioUrl){URL.revokeObjectURL(statusAudioUrl);statusAudioUrl=null}
@@ -196,18 +249,46 @@ async function playStatusNotice(kind){
   stopStatusNotice();currentStatusKind=kind;
   const token=++statusNoticeToken;
   statusTurnKey=`status-${Date.now()}-${Math.random().toString(36).slice(2,10)}`;
-  if(!audioUnlocked&&audioUnlockPromise)await audioUnlockPromise.catch(()=>{});
+  if(!audioUnlocked){
+    if(audioUnlockPromise)await audioUnlockPromise.catch(()=>{});
+    else await unlockAudio()?.catch(()=>{});
+  }
   if(token!==statusNoticeToken||!audioUnlocked||!voiceEnabled)return;
   const text=randomStatusPhrase(kind);if(!text)return;
   const controller=new AbortController();statusController=controller;
   try{
     const response=await fetch('/api/tts',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text,emotion:kind==='compression'?'curious':'neutral',turn_key:statusTurnKey,voice:persona.voice}),signal:controller.signal});
     if(!response.ok||token!==statusNoticeToken)return;
-    const audioUrl=URL.createObjectURL(await response.blob());
+    const blob=await response.blob();
+    const envelopePromise=buildAudioEnvelope(blob);
+    const audioUrl=URL.createObjectURL(blob);
     if(token!==statusNoticeToken){URL.revokeObjectURL(audioUrl);return}
     statusAudioUrl=audioUrl;statusPlayer.src=statusAudioUrl;
     await statusPlayer.play();
+    if(token!==statusNoticeToken)return;
+    avatar.classList.add('speaking');
+    startStatusLipSync(await envelopePromise);
   }catch(error){if(error?.name!=='AbortError')console.warn('Annonce vocale indisponible',error)}
+}
+function mainSpeechInProgress(){
+  return Boolean(streamingSpeech?.audioStarted)||(!player.paused&&!player.ended);
+}
+function requestStatusNotice(kind){
+  if(kind==='compression'&&mainSpeechInProgress()){
+    deferredStatusNoticeKind=kind;
+    reportAudioTiming('status.deferred',{detail:`${kind}:main speech active`});
+    return false;
+  }
+  deferredStatusNoticeKind=null;
+  void playStatusNotice(kind);
+  return true;
+}
+function flushDeferredStatusNotice(){
+  const kind=deferredStatusNoticeKind;
+  if(!kind)return false;
+  deferredStatusNoticeKind=null;
+  void playStatusNotice(kind);
+  return true;
 }
 
 function reportAudioTiming(event,{turnKey=activeTurnKey,chunkSeq=0,durationMs=null,text='',detail=''}={}){
@@ -277,11 +358,34 @@ function startLipSync(envelope){
   animate();
 }
 
+function stopStatusLipSync(){
+  if(statusMouthFrame)cancelAnimationFrame(statusMouthFrame);
+  statusMouthFrame=null;
+  statusAudioEnvelope=[];
+  window.aniAvatar?.setMouthOpen(0);
+  avatar.classList.remove('speaking');
+}
+
+function startStatusLipSync(envelope){
+  statusAudioEnvelope=envelope;
+  const animate=()=>{
+    if(statusPlayer.paused||statusPlayer.ended){stopStatusLipSync();return}
+    const frame=Math.floor(statusPlayer.currentTime*ENVELOPE_FPS);
+    const energy=statusAudioEnvelope[frame]??0.025;
+    const openness=Math.max(.16,Math.min(1.25,.16+energy*12));
+    window.aniAvatar?.setMouthOpen(openness);
+    statusMouthFrame=requestAnimationFrame(animate);
+  };
+  animate();
+}
+
 function cancelActiveAniTurn({removeBubble=false}={}){
   const turnId=activeTurnId;
   const turnKey=activeTurnKey;
   if(aniTurnActive&&turnKey)fetch('/api/cancel',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({turn_key:turnKey}),keepalive:true}).catch(()=>{});
   activeTurnId++;activeTurnKey=null;
+  deferredStatusNoticeKind=null;
+  activeToolNames.clear();clearTimeout(toolNoticeTimer);toolNoticeTimer=null;
   clearTimeout(slowWakeTimer);slowWakeTimer=null;stopStatusNotice();setPhase('idle');
   chatController?.abort();chatController=null;
   streamingSpeech?.cancel();streamingSpeech=null;
@@ -304,12 +408,23 @@ function interruptAudioForBargeIn(){
   stopLipSync();
 }
 
+function sanitizeTextForTts(text){
+  return String(text||'')
+    .replace(/[#*0-9]\uFE0F?\u20E3/gu,'')
+    .replace(/[\p{Extended_Pictographic}\p{Emoji_Presentation}\p{Emoji_Modifier}\u{1F1E6}-\u{1F1FF}]/gu,'')
+    .replace(/[\u200D\uFE0E\uFE0F\u20E3]/g,'')
+    .replace(/\s{2,}/g,' ')
+    .trim();
+}
+
 async function fetchAudioChunk(text,emotion,instructions,turnId,chunkSeq){
+  const spokenText=sanitizeTextForTts(text);
+  if(!spokenText)throw new Error('Aucun texte à prononcer après filtrage des emojis.');
   ttsController=new AbortController();
   const started=performance.now();
-  reportAudioTiming('tts.fetch.start',{chunkSeq,text});
+  reportAudioTiming('tts.fetch.start',{chunkSeq,text:spokenText});
   try{
-    const response=await fetch('/api/tts',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text,emotion,instructions,turn_key:activeTurnKey,chunk_seq:chunkSeq,voice:persona.voice}),signal:ttsController.signal});
+    const response=await fetch('/api/tts',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text:spokenText,emotion,instructions,turn_key:activeTurnKey,chunk_seq:chunkSeq,voice:persona.voice}),signal:ttsController.signal});
     if(turnId!==activeTurnId)return null;
     if(!response.ok)throw new Error('Voix indisponible');
     const blob=await response.blob();
@@ -324,14 +439,26 @@ async function fetchAudioChunk(text,emotion,instructions,turnId,chunkSeq){
 function waitForAudioStop(turnId){
   return new Promise(resolve=>{
     let settled=false;
+    const startedAt=performance.now();
+    let completionPoll=null;
     const finish=event=>{
       if(settled)return;
-      const reachedEnd=event.type==='ended'||player.ended||(Number.isFinite(player.duration)&&player.duration>0&&player.currentTime>=player.duration-.05);
+      const reachedEnd=event?.type==='ended'||player.ended||(Number.isFinite(player.duration)&&player.duration>0&&player.currentTime>=player.duration-.05);
       settled=true;
+      if(completionPoll!==null)clearInterval(completionPoll);
       player.removeEventListener('ended',finish);player.removeEventListener('pause',finish);player.removeEventListener('error',finish);
       resolve(reachedEnd&&turnId===activeTurnId);
     };
     player.addEventListener('ended',finish);player.addEventListener('pause',finish);player.addEventListener('error',finish);
+    completionPoll=setInterval(()=>{
+      const duration=Number.isFinite(player.duration)&&player.duration>0?player.duration:null;
+      if(player.ended||(duration!==null&&player.currentTime>=duration-.05)){
+        finish({type:'poll'});
+        return;
+      }
+      const watchdogMs=duration!==null?Math.max(15000,duration*1000+5000):30000;
+      if(performance.now()-startedAt>=watchdogMs)finish({type:'timeout'});
+    },200);
   });
 }
 
@@ -366,6 +493,7 @@ function createStreamingSpeech(turnId){
   let cancelled=false;
   let turnKey=null;
   let nextChunkSeq=1;
+  let audioStarted=false;
   let wake=null;
   const notify=()=>{if(wake){const resolve=wake;wake=null;resolve()}};
   const ensurePrefetch=()=>{
@@ -403,6 +531,7 @@ function createStreamingSpeech(turnId){
       if(cancelled||turnId!==activeTurnId)return;
       pendingAudio=null;
       ensurePrefetch();
+      audioStarted=true;
       if(!await playAudioChunk({...next.item,blob},turnId))return;
     }
   };
@@ -411,9 +540,11 @@ function createStreamingSpeech(turnId){
   return {
     push(text,emotion='neutral'){
       if(closed||cancelled||!text)return;
-      const item={text,emotion,chunkSeq:nextChunkSeq++};
+      const spokenText=sanitizeTextForTts(text);
+      if(!spokenText)return;
+      const item={text:spokenText,emotion,chunkSeq:nextChunkSeq++};
       queue.push(item);
-      reportAudioTiming('speech.queued',{turnKey,chunkSeq:item.chunkSeq,text,detail:`queue=${queue.length}`});
+      reportAudioTiming('speech.queued',{turnKey,chunkSeq:item.chunkSeq,text:spokenText,detail:`queue=${queue.length}`});
       ensurePrefetch();notify();
     },
     close(){closed=true;notify()},
@@ -422,6 +553,7 @@ function createStreamingSpeech(turnId){
       cancelled=true;closed=true;queue.length=0;ttsController?.abort();notify();
       if(turnKey)fetch('/api/tts/cancel',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({turn_key:turnKey}),keepalive:true}).catch(()=>{});
     },
+    get audioStarted(){return audioStarted&&!cancelled},
     done,
   };
 }
@@ -452,14 +584,8 @@ function streamingDisplayText(text){
 function sessionForNextTurn(){
   const sessionKey=`ani.session.${currentProfile}`;
   const turnsKey=`ani.session.turns.${currentProfile}`;
-  let sessionId=localStorage.getItem(sessionKey);
-  let turns=Math.max(0,Number.parseInt(localStorage.getItem(turnsKey)||'0',10)||0);
-  if(sessionId&&turns>=MAX_SESSION_TURNS){
-    localStorage.removeItem(sessionKey);
-    localStorage.removeItem(turnsKey);
-    sessionId=null;turns=0;
-    refreshContextMeter();
-  }
+  const sessionId=localStorage.getItem(sessionKey);
+  const turns=Math.max(0,Number.parseInt(localStorage.getItem(turnsKey)||'0',10)||0);
   return {sessionId,turnNumber:turns+1};
 }
 player.addEventListener('ended',stopLipSync);
@@ -486,7 +612,18 @@ function selectProfile(profile){
   refreshContextMeter();refreshModelSelector();refreshAvatarSelector();loadPersona().then(refreshVoiceSelector);
 }
 const modelSelector=document.getElementById('model-selector');
+const modelStorageKey=()=>`ani.model.${currentProfile}`;
 let modelCatalog=[];
+function updateVisionControls(){
+  const selected=modelCatalog.find(model=>model.id===modelSelector?.value);
+  const enabled=Boolean(selected?.vision);
+  for(const button of [cameraButton,screenButton]){
+    if(!button)continue;
+    button.disabled=!enabled;
+    button.setAttribute('aria-disabled',String(!enabled));
+    button.title=enabled?(button===cameraButton?'Caméra':'Capture écran'):'Sélectionne un modèle vision pour utiliser cette fonction';
+  }
+}
 async function refreshModelSelector(){
   if(!modelSelector)return;
   try{
@@ -500,12 +637,14 @@ async function refreshModelSelector(){
     option.textContent=model.vision?`${model.id} (vision)`:model.id;
     return option;
   }));
-  const saved=localStorage.getItem(`ani.model.${currentProfile}`)||'';
+  const saved=localStorage.getItem(modelStorageKey())||'';
   if(modelCatalog.some(model=>model.id===saved))modelSelector.value=saved;
-  else if(saved)localStorage.removeItem(`ani.model.${currentProfile}`);
+  else if(saved)localStorage.removeItem(modelStorageKey());
+  updateVisionControls();
 }
 modelSelector?.addEventListener('change',()=>{
-  if(modelSelector.value)localStorage.setItem(`ani.model.${currentProfile}`,modelSelector.value);
+  if(modelSelector.value)localStorage.setItem(modelStorageKey(),modelSelector.value);
+  updateVisionControls();
 });
 const avatarSelector=document.getElementById('avatar-selector');
 const voiceSelector=document.getElementById('voice-selector');
@@ -689,17 +828,43 @@ function captureAniCanvas(){
   if(!input.value.trim())input.value='Regarde-toi. ';
 }
 
+function showUserMessage(message,{replacePortrait=true}={}){
+  if(isLandscapeLayout())pushLandscapeMessage(message,'user');
+  else{
+    if(replacePortrait)history.replaceChildren();
+    bubble(message,'user');
+  }
+}
+
+async function steerActiveTool(message){
+  input.blur();unlockAudio();input.value='';
+  showUserMessage(message,{replacePortrait:false});
+  const response=await fetch('/api/chat/steer',{
+    method:'POST',
+    headers:{'content-type':'application/json'},
+    body:JSON.stringify({turn_key:activeTurnKey,message}),
+  });
+  if(!response.ok){
+    const data=await response.json().catch(()=>({}));
+    throw new Error(data.detail||'Ta précision n’a pas pu rejoindre la recherche.');
+  }
+}
+
 form.addEventListener('submit',async event=>{
   event.preventDefault();const message=input.value.trim();if(!message)return;
   if(!currentProfile){showProfilePicker();return}
+  if(aniTurnActive&&activeTurnKey&&activeToolNames.size){
+    try{await steerActiveTool(message)}
+    catch(error){bubble(error.message,'ani')}
+    return;
+  }
   cancelActiveAniTurn();const turnId=activeTurnId;aniTurnActive=true;
   turnTimingStarted=performance.now();lastAudioEndedAt=null;
   chatController=new AbortController();
   streamingSpeech=voiceEnabled?createStreamingSpeech(turnId):null;
   const sessionState=sessionForNextTurn();
   input.blur();unlockAudio();input.value='';setEmotion('curious');setPhase('llm');
-  if(isLandscapeLayout())pushLandscapeMessage(message,'user');
-  else{history.replaceChildren();bubble(message,'user')}
+  showUserMessage(message);
   let streamedText='';
   let completed=null;
   if(!slowWakeNoticeUsed)slowWakeTimer=setTimeout(()=>{
@@ -708,7 +873,7 @@ form.addEventListener('submit',async event=>{
     }
   },6000);
   try{
-    const response=await fetch('/api/chat/stream',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message,session_id:sessionState.sessionId,turn_id:turnId,profile:currentProfile,model:localStorage.getItem(`ani.model.${currentProfile}`)||null,image:pendingImage,voice:persona.voice}),signal:chatController.signal});
+    const response=await fetch('/api/chat/stream',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message,session_id:sessionState.sessionId,turn_id:turnId,profile:currentProfile,model:localStorage.getItem(modelStorageKey())||null,image:pendingImage,voice:persona.voice,avatar:avatarSelector?.value||persona.avatar}),signal:chatController.signal});
     setImagePreview(null);
     if(turnId!==activeTurnId)return;
     if(!response.ok){const data=await response.json();throw new Error(data.detail||'Ani ne répond pas')}
@@ -720,8 +885,36 @@ form.addEventListener('submit',async event=>{
           localStorage.setItem(`ani.session.turns.${currentProfile}`,String(sessionState.turnNumber));
           refreshContextMeter();
         }
+        if(event.model&&modelSelector&&modelCatalog.some(model=>model.id===event.model)){
+          modelSelector.value=event.model;
+          localStorage.setItem(modelStorageKey(),event.model);
+          updateVisionControls();
+        }
         activeTurnKey=event.turn_key||null;
         streamingSpeech?.setTurnKey(activeTurnKey);
+        return;
+      }
+      if(event.type==='tool'){
+        const toolName=event.name||'outil';
+        if(event.state==='start'){
+          activeToolNames.add(toolName);
+          clearTimeout(slowWakeTimer);slowWakeTimer=null;setPhase('tool');
+          const isSearch=['web_search','web_extract','x_search'].includes(toolName);
+          const notice=isSearch?'Je suis en train de chercher, je te réponds dès que j’ai trouvé.':'Je m’en occupe, ça prend juste un petit moment.';
+          const announce=()=>{
+            if(!activeToolNames.has(toolName))return;
+            if(!activeAssistantBubble){
+              if(isLandscapeLayout())activeAssistantBubble=pushLandscapeMessage(notice,'ani');
+              else activeAssistantBubble=bubble(notice,'ani');
+            }else activeAssistantBubble.textContent=notice;
+            playStatusNotice(isSearch?'searching':'working');
+          };
+          clearTimeout(toolNoticeTimer);
+          if(isSearch)announce();else toolNoticeTimer=setTimeout(announce,1200);
+        }else if(event.state==='complete'){
+          activeToolNames.delete(toolName);
+          if(!activeToolNames.size){clearTimeout(toolNoticeTimer);toolNoticeTimer=null;setPhase('llm')}
+        }
         return;
       }
       if(event.type==='delta'){
@@ -730,6 +923,7 @@ form.addEventListener('submit',async event=>{
         setPhase('answering');
         streamedText+=event.text||'';
         const display=streamingDisplayText(streamedText);
+        if(activeAssistantBubble?.isConnected)history.append(activeAssistantBubble);
         if(!activeAssistantBubble){
           if(isLandscapeLayout())activeAssistantBubble=pushLandscapeMessage(display,'ani');
           else activeAssistantBubble=bubble(display,'ani');
@@ -744,9 +938,13 @@ form.addEventListener('submit',async event=>{
         streamingSpeech?.push(event.text,event.emotion);
         return;
       }
+      if(event.type==='context'){
+        updateContextMeter(event.used,event.max);
+        return;
+      }
       if(event.type==='phase'&&event.phase==='compression'){
         clearTimeout(slowWakeTimer);slowWakeTimer=null;
-        if(phaseIndicator.dataset.phase!=='compression'){setPhase('compression');playStatusNotice('compression')}
+        if(phaseIndicator.dataset.phase!=='compression'){setPhase('compression');requestStatusNotice('compression')}
         return;
       }
       if(event.type==='phase'&&event.phase==='llm'){setPhase('llm');return}
@@ -757,7 +955,7 @@ form.addEventListener('submit',async event=>{
     if(turnId!==activeTurnId)return;
     if(!completed)throw new Error('La réponse d’Ani a été interrompue.');
     if(completed.session_id)localStorage.setItem(`ani.session.${currentProfile}`,completed.session_id);
-    clearTimeout(slowWakeTimer);slowWakeTimer=null;setEmotion(completed.emotion);setPhase('idle');
+    clearTimeout(slowWakeTimer);slowWakeTimer=null;activeToolNames.clear();clearTimeout(toolNoticeTimer);toolNoticeTimer=null;setEmotion(completed.emotion);setPhase('idle');
     refreshContextMeter();
     if(!activeAssistantBubble){
       const lastAni=[...history.querySelectorAll('.bubble.ani')].pop();
@@ -771,17 +969,26 @@ form.addEventListener('submit',async event=>{
       else activeAssistantBubble=bubble(completed.reply,'ani');
     }
     else activeAssistantBubble.textContent=completed.reply;
-    const replyMotion=completed.actions?.[0]?.name;if(replyMotion)window.aniAvatar?.playMotion(replyMotion);
+    const replyMotion=completed.actions?.[0]?.name;
+    if(replyMotion){
+      const accepted=window.aniAvatar?.playMotion(replyMotion)??false;
+      const activeClip=window.aniAvatar?.getAnimationState?.().activeClip||'';
+      reportAudioTiming('avatar.motion.dispatched',{text:replyMotion,detail:`accepted=${accepted} clip=${activeClip||'procedural'}`});
+    }
     if(streamingSpeech){
       streamingSpeech.close();
       await streamingSpeech.done;
     }
-    if(turnId===activeTurnId){aniTurnActive=false;activeAssistantBubble=null;streamingSpeech=null}
+    if(turnId===activeTurnId){
+      aniTurnActive=false;activeAssistantBubble=null;streamingSpeech=null;
+      flushDeferredStatusNotice();
+    }
   }catch(error){
     if(error.name==='AbortError'||turnId!==activeTurnId)return;
     streamingSpeech?.cancel();streamingSpeech=null;
+    deferredStatusNoticeKind=null;
     player.pause();stopLipSync();
-    clearTimeout(slowWakeTimer);slowWakeTimer=null;setPhase('idle');
+    clearTimeout(slowWakeTimer);slowWakeTimer=null;activeToolNames.clear();clearTimeout(toolNoticeTimer);toolNoticeTimer=null;setPhase('idle');
     aniTurnActive=false;activeAssistantBubble=null;setEmotion('sad');
     if(isLandscapeLayout())pushLandscapeMessage(error.message,'ani');
     else bubble(error.message,'ani');
@@ -840,7 +1047,6 @@ function scheduleTranscriptCommit(){
   transcriptCommitTimer=setTimeout(()=>{
     transcriptCommitTimer=null;
     if(utteranceRecorder||queuedTranscriptions)return;
-    if(aniTurnActive){scheduleTranscriptCommit();return}
     const message=pendingTranscript.trim();pendingTranscript='';
     if(message){input.value=message;form.requestSubmit()}
   },TRANSCRIPT_COMMIT_GRACE_MS);
@@ -980,7 +1186,12 @@ micButton.addEventListener('click',async()=>{
   catch(error){stopMicrophoneMode(false);bubble(microphoneErrorMessage(error),'ani')}
 });
 armPreferredMicrophone();
-document.addEventListener('visibilitychange',()=>{if(!document.hidden)armPreferredMicrophone()});
+void keepScreenAwake();
+document.addEventListener('visibilitychange',()=>{
+  if(!document.hidden){armPreferredMicrophone();void keepScreenAwake()}
+});
+window.addEventListener('pageshow',()=>void keepScreenAwake());
+document.addEventListener('pointerdown',()=>void keepScreenAwake(),{passive:true});
 
 window.addEventListener('beforeinstallprompt',event=>{event.preventDefault();deferredInstall=event;installButton.hidden=false});
 installButton.addEventListener('click',async()=>{if(!deferredInstall)return;deferredInstall.prompt();await deferredInstall.userChoice;deferredInstall=null;installButton.hidden=true});

@@ -5,12 +5,12 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/home/francois/ani-companion
+WorkingDirectory=/home/francois/projects/ani-companion
 Environment="HERMES_HOME=/home/francois/.hermes/profiles/ani"
 Environment="PATH=/home/francois/.hermes/hermes-agent/venv/bin:/usr/local/bin:/usr/bin:/bin"
-Environment="ANI_HERMES_MODEL=ani-gemma4-vision:latest"
+Environment="ANI_HERMES_MODEL=ani-gemma4-12b:latest"
 Environment="ANI_HERMES_PROVIDER=custom"
-Environment="ANI_HERMES_TOOLSETS=memory"
+Environment="ANI_HERMES_TOOLSETS=memory,web"
 Environment="ANI_QWEN_TTS_URL=http://127.0.0.1:15004/v1/audio/speech"
 Environment="ANI_QWEN_TTS_VOICE=Serena"
 Environment="ANI_CHAT_TIMEOUT_SECONDS=900"
@@ -20,7 +20,7 @@ RestartSec=3
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ReadWritePaths=/home/francois/.hermes/profiles/ani /home/francois/ani-companion
+ReadWritePaths=/home/francois/.hermes/profiles/ani /home/francois/projects/ani-companion
 
 [Install]
 WantedBy=default.target
