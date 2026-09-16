@@ -12,6 +12,7 @@ Les médias fournis sont versionnés dans [`static/media/`](static/media/) afin 
 ![Ani Companion — mode portrait](static/media/ani-companion-portrait.png)
 
 Démonstrations vidéo : [démo 1](static/media/ani-companion-demo-01.mp4) · [démo 2](static/media/ani-companion-demo-02.mp4)
+https://github.com/fguilleme/ani-companion/blame/619c03ca7fd84338ca5625abe2b42c1b7a6295cb/static/media/ani-companion-demo-01.mp4
 
 Les deux vidéos sont encodées en H.264 avec `CRF 40` et `preset slow`, et conservent leur piste audio AAC. Les fichiers source MOV restent dans le répertoire personnel et ne sont pas nécessaires au lancement de l'application.
 
