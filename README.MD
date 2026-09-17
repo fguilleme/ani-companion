@@ -15,15 +15,11 @@ Les médias fournis sont versionnés dans [`static/media/`](static/media/) afin 
 
 ### Démonstration 1
 
-<video src="static/media/ani-companion-demo-01.mp4" controls playsinline preload="metadata" width="100%">
-  Votre navigateur ne prend pas en charge la lecture vidéo.
-</video>
+[![Aperçu animé de la démonstration 1](static/media/ani-companion-demo-01.gif)](static/media/ani-companion-demo-01.mp4)
 
 ### Démonstration 2
 
-<video src="static/media/ani-companion-demo-02.mp4" controls playsinline preload="metadata" width="100%">
-  Votre navigateur ne prend pas en charge la lecture vidéo.
-</video>
+[![Aperçu animé de la démonstration 2](static/media/ani-companion-demo-02.gif)](static/media/ani-companion-demo-02.mp4)
 
 Les deux vidéos sont encodées en H.264 avec `CRF 40` et `preset slow`, et conservent leur piste audio AAC. Les fichiers source MOV restent dans le répertoire personnel et ne sont pas nécessaires au lancement de l'application.
 

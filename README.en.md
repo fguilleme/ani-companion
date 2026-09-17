@@ -15,15 +15,11 @@ The included media files are versioned in [`static/media/`](static/media/) so th
 
 ### Demo 1
 
-<video src="static/media/ani-companion-demo-01.mp4" controls playsinline preload="metadata" width="100%">
-  Your browser does not support video playback.
-</video>
+[![Animated preview of demo 1](static/media/ani-companion-demo-01.gif)](static/media/ani-companion-demo-01.mp4)
 
 ### Demo 2
 
-<video src="static/media/ani-companion-demo-02.mp4" controls playsinline preload="metadata" width="100%">
-  Your browser does not support video playback.
-</video>
+[![Animated preview of demo 2](static/media/ani-companion-demo-02.gif)](static/media/ani-companion-demo-02.mp4)
 
 Both videos are encoded in H.264 with `CRF 40` and the `slow` preset, while preserving their AAC audio tracks. The source MOV files remain in the user's home directory and are not required to run the application.
 
