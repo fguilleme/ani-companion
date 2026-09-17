@@ -15,11 +15,11 @@ The included media files are versioned in [`static/media/`](static/media/) so th
 
 ### Demo 1
 
-[![Animated preview of demo 1](static/media/ani-companion-demo-01.gif)](static/media/ani-companion-demo-01.mp4)
+https://github.com/user-attachments/assets/f94e63d7-92ab-4e7b-b661-4783ab6078bd
 
 ### Demo 2
 
-[![Animated preview of demo 2](static/media/ani-companion-demo-02.gif)](static/media/ani-companion-demo-02.mp4)
+https://github.com/user-attachments/assets/889105c5-50ff-4b90-a069-dd9dff41f495
 
 Both videos are encoded in H.264 with `CRF 40` and the `slow` preset, while preserving their AAC audio tracks. The source MOV files remain in the user's home directory and are not required to run the application.
 
