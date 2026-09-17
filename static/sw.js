@@ -1,5 +1,5 @@
-const CACHE='ani-companion-v92';
-const ASSETS=['/','/style.css?v=40','/app.js?v=63','/avatar-3d.bundle.js?v=68','/manifest.webmanifest','/icons/melissa-192.png','/icons/melissa-512.png'];
+const CACHE='ani-companion-v93';
+const ASSETS=['/','/style.css?v=40','/app.js?v=64','/avatar-3d.bundle.js?v=68','/manifest.webmanifest','/icons/melissa-192.png','/icons/melissa-512.png'];
 self.addEventListener('install',event=>event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(ASSETS)).then(()=>self.skipWaiting())));
 self.addEventListener('activate',event=>event.waitUntil(
   caches.keys()

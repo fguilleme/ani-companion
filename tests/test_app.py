@@ -2,6 +2,8 @@ import asyncio
 import io
 import json
 import os
+import sqlite3
+import tempfile
 import unittest
 import wave
 from pathlib import Path
@@ -457,7 +459,7 @@ class AniCompanionTests(unittest.TestCase):
 
     def test_pwa_displays_stream_error_message(self):
         script = (ROOT / 'static' / 'app.js').read_text()
-        self.assertIn("throw new Error(event.message||'Ani ne répond pas')", script)
+        self.assertIn("new Error(event.message||'Ani ne répond pas')", script)
 
     def test_chat_stream_emits_text_and_speech_before_completion(self):
         class FakeStdin:
@@ -680,10 +682,54 @@ class AniCompanionTests(unittest.TestCase):
             })
         app_module.raise_for_gateway_completion({'status': 'complete', 'text': 'Bonjour.'})
 
+    def test_truncated_continuation_error_requires_fresh_session(self):
+        self.assertTrue(app_module.gateway_error_requires_fresh_session(
+            'Response remained truncated after 4 continuation attempts'
+        ))
+        self.assertFalse(app_module.gateway_error_requires_fresh_session('provider unavailable'))
+
+    def test_client_discards_only_poisoned_session_after_truncation(self):
+        script = (ROOT / 'static' / 'app.js').read_text()
+        self.assertIn('streamError.resetSession=Boolean(event.reset_session)', script)
+        self.assertIn('if(error.resetSession){', script)
+        self.assertIn('localStorage.removeItem(`ani.session.${currentProfile}`)', script)
+
+    def test_server_ignores_a_poisoned_session_even_with_a_stale_client(self):
+        source = (ROOT / 'app.py').read_text()
+        self.assertIn('requested_session_id in POISONED_CHAT_SESSIONS', source)
+        self.assertIn('requested_session_id = None', source)
+        self.assertIn('POISONED_CHAT_SESSIONS.add(stored_session_id)', source)
+        self.assertIn('await asyncio.to_thread(unload_ollama_model, selected_model)', source)
+
+    def test_unload_ollama_model_evicts_the_selected_runner(self):
+        response = MagicMock()
+        response.__enter__.return_value = response
+        with patch.object(app_module.urllib.request, 'urlopen', return_value=response) as urlopen:
+            self.assertTrue(app_module.unload_ollama_model('ani-gemma4:latest'))
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.full_url, f'{app_module.OLLAMA_BASE_URL}/api/generate')
+        self.assertEqual(json.loads(request.data), {'model': 'ani-gemma4:latest', 'keep_alive': 0})
+
+    def test_persisted_repeated_token_tail_is_treated_as_poisoned(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / 'state.db'
+            with sqlite3.connect(database) as connection:
+                connection.execute(
+                    'CREATE TABLE messages ('
+                    'id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, active INTEGER, '
+                    'finish_reason TEXT, content TEXT)'
+                )
+                connection.execute(
+                    'INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?)',
+                    (1, 'bad-session', 'assistant', 1, 'length', '<unused24>' * 8),
+                )
+            self.assertTrue(app_module.hermes_session_has_poisoned_tail(directory, 'bad-session'))
+            self.assertFalse(app_module.hermes_session_has_poisoned_tail(directory, 'other-session'))
+
     def test_stream_errors_do_not_expose_gateway_exception_details(self):
         source = (ROOT / 'app.py').read_text()
         self.assertNotIn("message=f'Réponse Hermes indisponible: {str(exc)", source)
-        self.assertIn("message='La réponse locale d’Ani a échoué.'", source)
+        self.assertIn("else 'La réponse locale d’Ani a échoué.'", source)
         self.assertIn("logger.exception('Hermes streaming failed')", source)
 
     def test_cancelled_turns_clear_stale_session_leases(self):
@@ -1193,7 +1239,7 @@ class AniCompanionTests(unittest.TestCase):
 
     def test_service_worker_precaches_avatar_runtime_without_intercepting_large_models(self):
         worker = (ROOT / 'static' / 'sw.js').read_text()
-        self.assertIn("const CACHE='ani-companion-v92'", worker)
+        self.assertIn("const CACHE='ani-companion-v93'", worker)
         self.assertIn("'/avatar-3d.bundle.js?v=68'", worker)
         self.assertIn("url.pathname.startsWith('/models/')", worker)
 
@@ -1233,10 +1279,10 @@ class AniCompanionTests(unittest.TestCase):
         html = (ROOT / 'static' / 'index.html').read_text()
         worker = (ROOT / 'static' / 'sw.js').read_text()
         self.assertIn('href="/style.css?v=40"', html)
-        self.assertIn('src="/app.js?v=63"', html)
+        self.assertIn('src="/app.js?v=64"', html)
         self.assertIn('src="/avatar-3d.bundle.js?v=68"', html)
         self.assertIn("'/style.css?v=40'", worker)
-        self.assertIn("'/app.js?v=63'", worker)
+        self.assertIn("'/app.js?v=64'", worker)
         self.assertIn("'/avatar-3d.bundle.js?v=68'", worker)
 
     def test_visible_pwa_keeps_screen_awake_and_reacquires_lock(self):

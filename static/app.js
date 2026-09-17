@@ -949,7 +949,11 @@ form.addEventListener('submit',async event=>{
       }
       if(event.type==='phase'&&event.phase==='llm'){setPhase('llm');return}
       if(event.type==='phase'&&event.phase==='compacted'){setPhase('llm');stopStatusNotice();return}
-      if(event.type==='error')throw new Error(event.message||'Ani ne répond pas');
+      if(event.type==='error'){
+        const streamError=new Error(event.message||'Ani ne répond pas');
+        streamError.resetSession=Boolean(event.reset_session);
+        throw streamError;
+      }
       if(event.type==='complete')completed=event;
     });
     if(turnId!==activeTurnId)return;
@@ -985,6 +989,11 @@ form.addEventListener('submit',async event=>{
     }
   }catch(error){
     if(error.name==='AbortError'||turnId!==activeTurnId)return;
+    if(error.resetSession){
+      localStorage.removeItem(`ani.session.${currentProfile}`);
+      localStorage.removeItem(`ani.session.turns.${currentProfile}`);
+      refreshContextMeter();
+    }
     streamingSpeech?.cancel();streamingSpeech=null;
     deferredStatusNoticeKind=null;
     player.pause();stopLipSync();

@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 import secrets
 import signal
+import sqlite3
 import struct
 import tempfile
 import time
@@ -51,6 +52,8 @@ RUN_SEMAPHORE = asyncio.Semaphore(2)
 ACTIVE_CHAT_PROCESSES: dict[str, asyncio.subprocess.Process] = {}
 ACTIVE_CHAT_SESSIONS: dict[str, dict] = {}
 ACTIVE_TTS_TASKS: dict[str, asyncio.Task] = {}
+POISONED_CHAT_SESSIONS: set[str] = set()
+MAX_POISONED_CHAT_SESSIONS = 256
 logger = logging.getLogger('ani-companion')
 logger.setLevel(logging.INFO)
 if not logger.handlers:
@@ -940,6 +943,53 @@ def raise_for_gateway_completion(payload: dict) -> None:
     raise RuntimeError(str(detail))
 
 
+def gateway_error_requires_fresh_session(error: Exception | str) -> bool:
+    """Detect a continuation loop that leaves a Hermes session unusable."""
+    detail = str(error).casefold()
+    return 'response remained truncated after' in detail and 'continuation attempt' in detail
+
+
+def unload_ollama_model(model: str) -> bool:
+    """Unload a corrupted Ollama runner so the next request reloads it."""
+    request = urllib.request.Request(
+        f'{OLLAMA_BASE_URL}/api/generate',
+        data=json.dumps({'model': model, 'keep_alive': 0}).encode(),
+        headers={'Content-Type': 'application/json'},
+        method='POST',
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15):
+            return True
+    except OSError as error:
+        logger.warning('Could not unload Ollama model %s: %s', model, error)
+        return False
+
+
+def hermes_session_has_poisoned_tail(hermes_home: str, session_id: str | None) -> bool:
+    """Recognize a persisted repeated-token tail left by a failed continuation."""
+    if not session_id:
+        return False
+    database = Path(hermes_home) / 'state.db'
+    try:
+        with sqlite3.connect(f'file:{database}?mode=ro', uri=True, timeout=0.2) as connection:
+            row = connection.execute(
+                """
+                SELECT finish_reason, content
+                FROM messages
+                WHERE session_id = ? AND role = 'assistant' AND active = 1
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (session_id,),
+            ).fetchone()
+    except (OSError, sqlite3.Error):
+        return False
+    if not row:
+        return False
+    finish_reason, content = row
+    return finish_reason == 'length' and '<unused24>' in (content or '')
+
+
 def _remaining_gateway_time(deadline: float) -> float:
     remaining = deadline - asyncio.get_running_loop().time()
     if remaining <= 0:
@@ -1103,11 +1153,18 @@ async def stream_chat_events(payload: ChatRequest, turn_key: str):
     artifact_filter = StreamingControlTokenFilter()
     planner = StreamingSpeechBuffer()
     reply_parts: list[str] = []
-    stored_session_id = payload.session_id
+    profile_home = HERMES_PROFILES.get(payload.profile, HERMES_PROFILES[DEFAULT_PROFILE])
+    requested_session_id = payload.session_id
+    if requested_session_id and (
+        requested_session_id in POISONED_CHAT_SESSIONS
+        or hermes_session_has_poisoned_tail(profile_home, requested_session_id)
+    ):
+        logger.warning('Ignoring poisoned chat session %s; creating a fresh session', requested_session_id)
+        requested_session_id = None
+    stored_session_id = requested_session_id
     notifications: deque[dict] = deque()
     compression_active = False
     deadline = asyncio.get_running_loop().time() + CHAT_TIMEOUT_SECONDS
-    profile_home = HERMES_PROFILES.get(payload.profile, HERMES_PROFILES[DEFAULT_PROFILE])
     persona = load_avatar_persona(payload.profile)
     persona['display_name'] = companion_name_for_avatar(persona, payload.avatar)
     if payload.voice and VOICE_RE.fullmatch(payload.voice):
@@ -1155,13 +1212,13 @@ async def stream_chat_events(payload: ChatRequest, turn_key: str):
                     break
                 notifications.append(message)
 
-            if payload.session_id:
+            if requested_session_id:
                 try:
                     session = await _gateway_rpc(
                         process,
                         '1',
                         'session.resume',
-                        {'session_id': payload.session_id, 'omit_messages': True, 'eager_build': True},
+                        {'session_id': requested_session_id, 'omit_messages': True, 'eager_build': True},
                         notifications,
                         deadline,
                     )
@@ -1357,9 +1414,23 @@ async def stream_chat_events(payload: ChatRequest, turn_key: str):
         yield _stream_event('error', message="Le délai de réponse d'Ani est dépassé.")
     except asyncio.CancelledError:
         raise
-    except Exception:
+    except Exception as exc:
         logger.exception('Hermes streaming failed')
-        yield _stream_event('error', message='La réponse locale d’Ani a échoué.')
+        reset_session = gateway_error_requires_fresh_session(exc)
+        if reset_session:
+            if stored_session_id:
+                if len(POISONED_CHAT_SESSIONS) >= MAX_POISONED_CHAT_SESSIONS:
+                    POISONED_CHAT_SESSIONS.pop()
+                POISONED_CHAT_SESSIONS.add(stored_session_id)
+            await asyncio.to_thread(unload_ollama_model, selected_model)
+        yield _stream_event(
+            'error',
+            message=(
+                'J’ai eu un raté après avoir rangé mes idées. Renvoie-moi ton message.'
+                if reset_session else 'La réponse locale d’Ani a échoué.'
+            ),
+            reset_session=reset_session,
+        )
     finally:
         if image_path:
             _delete_file(image_path)
