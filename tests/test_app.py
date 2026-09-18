@@ -1304,6 +1304,8 @@ class AniCompanionTests(unittest.TestCase):
         manifest = json.loads((ROOT / 'static' / 'manifest.webmanifest').read_text())
         self.assertEqual(manifest['display'], 'standalone')
         self.assertEqual(manifest['name'], 'Melissa Companion')
+        self.assertEqual(manifest['id'], '/')
+        self.assertNotIn('shortcuts', manifest)
         self.assertTrue(any(icon['sizes'] == '512x512' for icon in manifest['icons']))
         html = (ROOT / 'static' / 'index.html').read_text()
         self.assertIn('rel="apple-touch-icon" href="/icons/melissa-192.png"', html)

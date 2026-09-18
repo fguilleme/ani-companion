@@ -2,6 +2,7 @@
   "name": "Melissa Companion",
   "short_name": "Melissa",
   "description": "Compagnon vocal et visuel personnel",
+  "id": "/",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
